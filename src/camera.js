@@ -85,7 +85,11 @@ export class OrbitCamera {
     this.addedTabIndex = !canvas.hasAttribute("tabindex");
     if (this.addedTabIndex) canvas.tabIndex = 0;
     this.upAxis = "y";
-    this.roll = 0; // accumulated roll (display/reset bookkeeping; the basis holds the true state)
+    this.roll = 0; // display bookkeeping; see #rollAngle for the live value
+    // Reference up for the roll readout/reset: the orientation the camera
+    // was restored/fitted with. Rolling measures deviation from THIS, not
+    // from world up, so "reset roll" returns to the imported view's tilt.
+    this.upRef = [0, 1, 0];
     // Orientation basis [rx,ry,rz, ux,uy,uz, bx,by,bz]: camera right/up/back
     // axes in world space, orthonormal, right-handed (right x up = back).
     // eye = target + back * distance. Trackball style: drags and roll rotate
@@ -228,38 +232,15 @@ export class OrbitCamera {
   }
   /** Pointer drag: rotate around local up (horizontal) and local right (vertical). */
   orbit(dx, dy) {
-    // Sensitivity: halved from the upstream 0.006 after user feedback.
-    const k = 0.003;
-    // Horizontal drag rotates around the WORLD up axis (not the camera's
-    // local up): orbiting never rolls the horizon. The camera keeps whatever
-    // roll it has (from restore/rotateRoll) — it just stops drifting.
-    const wu = this.#worldUp();
-    this.#rotateAroundWorld(wu, -dx * k);
-    // Vertical drag rotates around the camera's local right axis, then we
-    // re-derive up from the world axis so the horizon stays level.
+    // Sensitivity: 1/4 of the upstream 0.006 after user feedback.
+    const k = 0.0015;
+    this.#rotateAroundLocal(1, -dx * k);
+    // pole guard: keep |back · worldUp| within the old pitch clamp (±~86°)
     const before = [...this.basis];
     this.#rotateAroundLocal(0, -dy * k);
     const b = [this.basis[6], this.basis[7], this.basis[8]];
-    if (Math.abs(dot(b, wu)) > 0.9975) {
-      this.basis = before;
-      return;
-    }
-    // Re-level: keep back, rebuild right/up from the world up axis.
-    this.#setBasis(b, wu);
-  }
-  /** Rotate the whole basis around a world-space axis (Rodrigues per vector). */
-  #rotateAroundWorld(axis, angle) {
-    if (!angle) return;
-    const k = unit(axis);
-    const c = Math.cos(angle), s = Math.sin(angle);
-    const rot = (v) => {
-      const kxv = cross(k, v);
-      const kd = dot(k, v);
-      return v.map((x, i) => x * c + kxv[i] * s + k[i] * kd * (1 - c));
-    };
-    this.basis = [...rot([this.basis[0], this.basis[1], this.basis[2]]),
-                  ...rot([this.basis[3], this.basis[4], this.basis[5]]),
-                  ...rot([this.basis[6], this.basis[7], this.basis[8]])];
+    const wu = this.#worldUp();
+    if (Math.abs(dot(b, wu)) > 0.9975) this.basis = before;
   }
   fit(bounds = this.bounds) {
     this.stopMoving();
@@ -272,13 +253,14 @@ export class OrbitCamera {
     const halfAngle = Math.atan(Math.tan(Math.PI / 8) * Math.min(1, aspect));
     this.distance = (bounds.radius / Math.sin(halfAngle)) * 1.1;
     this.fov = Math.PI / 4;
-    this.roll = 0;
     // default viewing angle (old yaw 0.45 / pitch 0.12)
     const yaw = 0.45, pitch = 0.12;
     const horizontal = Math.cos(pitch);
     let offset = [Math.sin(yaw) * horizontal, Math.sin(pitch), Math.cos(yaw) * horizontal];
     if (this.upAxis === "z") [offset[1], offset[2]] = [-offset[2], offset[1]];
     this.#setBasis(unit(offset), this.#worldUp());
+    this.upRef = [...this.#worldUp()];
+    this.roll = 0;
     this.onChange?.();
   }
   restore(view) {
@@ -293,6 +275,7 @@ export class OrbitCamera {
     // imported orientations keep their exact roll and drag coherently after.
     const upVec = Array.isArray(up) ? up : this.#worldUp();
     this.#setBasis(unit(offset), upVec);
+    this.upRef = [...upVec];
     this.roll = 0;
     this.fov = (fov * Math.PI) / 180;
     this.onChange?.();
@@ -313,14 +296,40 @@ export class OrbitCamera {
     this.keys?.clear();
     this.fast = false;
   }
+  /** Live roll: signed angle from upRef to the current up around the view
+   *  axis. Derived from the basis, so it never desyncs from the camera. */
+  get #rollAngle() {
+    const back = [this.basis[6], this.basis[7], this.basis[8]];
+    const proj = (v) => {
+      const d = dot(v, back);
+      return v.map((x, i) => x - d * back[i]);
+    };
+    let u = proj([this.basis[3], this.basis[4], this.basis[5]]);
+    let r = proj(this.upRef);
+    const nu = Math.hypot(...u), nr = Math.hypot(...r);
+    if (nu < 1e-9 || nr < 1e-9) return 0;
+    u = u.map((x) => x / nu);
+    r = r.map((x) => x / nr);
+    const cosA = Math.max(-1, Math.min(1, dot(u, r)));
+    const cr = cross(r, u);
+    const sign = dot(cr, back) >= 0 ? 1 : -1;
+    return sign * Math.acos(cosA);
+  }
   /** Roll the camera around the view axis: rotates the up/right basis
    *  vectors themselves, so the camera's up direction follows the roll and
    *  later drags act in the rolled frame. delta in radians. */
   rotateRoll(delta) {
-    if (!Number.isFinite(delta)) return;
+    if (!Number.isFinite(delta) || !delta) return;
     this.#rotateAroundLocal(2, delta);
-    this.roll += delta;
+    this.roll = this.#rollAngle;
     this.onChange?.();
+  }
+  /** Reset the roll: rotate back to the reference up (the imported view's
+   *  own tilt), NOT to world up. */
+  resetRoll() {
+    const a = this.#rollAngle;
+    if (a) this.rotateRoll(-a);
+    this.roll = 0;
   }
   update(seconds) {
     if (!this.keys.size) return;

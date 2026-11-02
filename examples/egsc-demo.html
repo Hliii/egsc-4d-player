@@ -193,7 +193,7 @@
       };
       holdButton(document.getElementById("rollL"), -30 * DEG);
       holdButton(document.getElementById("rollR"), 30 * DEG);
-      rollinfo.onclick = () => { player.camera.rotateRoll(-player.camera.roll); showRoll(); };
+      rollinfo.onclick = () => { player.camera.resetRoll(); showRoll(); };
 
       // view export/import: click ⤓ view to copy the current camera as JSON
       // (+ a shareable ?view= link); open such a link to restore the view.
