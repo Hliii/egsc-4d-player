@@ -228,14 +228,38 @@ export class OrbitCamera {
   }
   /** Pointer drag: rotate around local up (horizontal) and local right (vertical). */
   orbit(dx, dy) {
-    const k = 0.006;
-    this.#rotateAroundLocal(1, -dx * k);
-    // pole guard: keep |back · worldUp| within the old pitch clamp (±~86°)
+    // Sensitivity: halved from the upstream 0.006 after user feedback.
+    const k = 0.003;
+    // Horizontal drag rotates around the WORLD up axis (not the camera's
+    // local up): orbiting never rolls the horizon. The camera keeps whatever
+    // roll it has (from restore/rotateRoll) — it just stops drifting.
+    const wu = this.#worldUp();
+    this.#rotateAroundWorld(wu, -dx * k);
+    // Vertical drag rotates around the camera's local right axis, then we
+    // re-derive up from the world axis so the horizon stays level.
     const before = [...this.basis];
     this.#rotateAroundLocal(0, -dy * k);
     const b = [this.basis[6], this.basis[7], this.basis[8]];
-    const wu = this.#worldUp();
-    if (Math.abs(dot(b, wu)) > 0.9975) this.basis = before;
+    if (Math.abs(dot(b, wu)) > 0.9975) {
+      this.basis = before;
+      return;
+    }
+    // Re-level: keep back, rebuild right/up from the world up axis.
+    this.#setBasis(b, wu);
+  }
+  /** Rotate the whole basis around a world-space axis (Rodrigues per vector). */
+  #rotateAroundWorld(axis, angle) {
+    if (!angle) return;
+    const k = unit(axis);
+    const c = Math.cos(angle), s = Math.sin(angle);
+    const rot = (v) => {
+      const kxv = cross(k, v);
+      const kd = dot(k, v);
+      return v.map((x, i) => x * c + kxv[i] * s + k[i] * kd * (1 - c));
+    };
+    this.basis = [...rot([this.basis[0], this.basis[1], this.basis[2]]),
+                  ...rot([this.basis[3], this.basis[4], this.basis[5]]),
+                  ...rot([this.basis[6], this.basis[7], this.basis[8]])];
   }
   fit(bounds = this.bounds) {
     this.stopMoving();
