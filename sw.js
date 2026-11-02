@@ -6,7 +6,7 @@
 // - fetch: cache-first for same-origin GETs (stale-while-revalidate for the
 //   HTML shells), so after the first load everything works with zero network.
 
-const CACHE = "egsc-4d-v1";
+const CACHE = "egsc-4d-v2";
 const SHELL = [
   "examples/egsc-demo.html",
   "src/index.js",
@@ -75,19 +75,25 @@ async function cacheFirst(request) {
   return response;
 }
 
-async function networkFirstForHtml(request) {
-  try {
-    const response = await fetch(request);
-    if (response.ok) {
-      const cache = await caches.open(CACHE);
-      cache.put(request, response.clone()).catch(() => {});
-    }
-    return response;
-  } catch {
-    const hit = await caches.match(request, { ignoreVary: true });
-    if (hit) return hit;
-    throw new Error("offline and not cached: " + request.url);
+async function htmlStrategy(request) {
+  // stale-while-revalidate: serve cached shell instantly (works offline on
+  // first reload), refresh the copy in the background when online.
+  const cached = await caches.match(request, { ignoreVary: true });
+  const network = fetch(request)
+    .then((response) => {
+      if (response.ok) {
+        caches.open(CACHE).then((c) => c.put(request, response.clone()).catch(() => {}));
+      }
+      return response;
+    })
+    .catch(() => null);
+  if (cached) {
+    network.catch(() => {});
+    return cached;
   }
+  const fresh = await network;
+  if (fresh) return fresh;
+  throw new Error("offline and not cached: " + request.url);
 }
 
 self.addEventListener("fetch", (event) => {
@@ -97,6 +103,6 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   const isHtml = request.destination === "document" || url.pathname.endsWith(".html");
   event.respondWith(
-    isHtml ? networkFirstForHtml(request) : cacheFirst(request),
+    isHtml ? htmlStrategy(request) : cacheFirst(request),
   );
 });
