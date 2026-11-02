@@ -158,18 +158,29 @@
           };
           const warm = async () => {
             try {
-              const cache = await caches.open("egsc-4d-v1");
-              if (await cache.match(new URL("./assets/scene.egsc", location.href).href))
-                offlineReady();
-              else {
-                // fetch the scene once so the SW caches it (streamed to disk)
-                await fetch(new URL("./assets/scene.egsc", location.href).href);
-                offlineReady();
+              // cache names evolve with sw.js CACHE version; probe any egsc cache
+              const names = (await caches.keys()).filter((n) => n.startsWith("egsc-4d-"));
+              for (const name of names) {
+                const cache = await caches.open(name);
+                if (await cache.match(new URL("./assets/scene.egsc", location.href).href)) {
+                  offlineReady();
+                  return;
+                }
               }
-            } catch { /* offline warmup is best effort */ }
+              // fetch the scene once so the SW caches it (streamed to disk)
+              await fetch(new URL("./assets/scene.egsc", location.href).href);
+              offlineReady();
+            } catch { /* best effort */ }
           };
           await navigator.serviceWorker.ready;
-          warm();
+          if (!navigator.serviceWorker.controller) {
+            // First visit: this page loaded before the SW was registered, so
+            // the SW cannot cache it. Reload once (now instant: HTTP cache) to
+            // bring the page under SW control.
+            location.reload();
+          } else {
+            warm();
+          }
         } catch (e) {
           console.warn("service worker unavailable:", e);
         }
