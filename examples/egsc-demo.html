@@ -33,6 +33,7 @@
     <canvas id="scene" aria-label="4D scene"></canvas>
     <div id="controls">
       <button id="play">Play / pause</button>
+      <button id="viewexport" title="Copy the current camera view (JSON + shareable URL)" style="border-color:#2f6f5f;color:#8fd">⤓ view</button>
       <button id="rollL" class="hold" title="Roll counter-clockwise (hold to spin, tap for a step)">↺</button>
       <span id="rollinfo" title="Click to reset roll">roll 0°</span>
       <button id="rollR" class="hold" title="Roll clockwise (hold to spin, tap for a step)">↻</button>
@@ -43,7 +44,6 @@
         <option value="4">4×</option>
       </select>
       <input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Time" />
-      <button id="viewexport" title="Copy the current camera view as JSON / shareable link">⤓ view</button>
     </div>
     <script type="module">
       import { FTGSPlayer } from "../src/index.js";
