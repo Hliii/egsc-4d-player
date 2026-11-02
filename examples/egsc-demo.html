@@ -115,7 +115,13 @@
       player.addEventListener("error", (e) => {
         status.textContent = `error: ${e.detail?.error ?? "see console"}`;
       });
-      let initialView = null;
+      // Default opening view (user-tuned); ?view= still overrides it.
+      let initialView = {
+        eye: [1.0356, -0.0149, 0.3992],
+        target: [6.0327, -0.5524, 1.9712],
+        up: [0.3135, 0.2004, -0.9282],
+        fov: 45,
+      };
       {
         const v = query.get("view");
         if (v) { try { initialView = JSON.parse(v); } catch { /* bad param: ignore */ } }
