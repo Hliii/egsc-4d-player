@@ -43,6 +43,7 @@
         <option value="4">4×</option>
       </select>
       <input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Time" />
+      <button id="viewexport" title="Copy the current camera view as JSON / shareable link">⤓ view</button>
     </div>
     <script type="module">
       import { FTGSPlayer } from "../src/index.js";
@@ -114,7 +115,12 @@
       player.addEventListener("error", (e) => {
         status.textContent = `error: ${e.detail?.error ?? "see console"}`;
       });
-      await player.load(new URL(src, location.href).href, { autoplay: true });
+      let initialView = null;
+      {
+        const v = query.get("view");
+        if (v) { try { initialView = JSON.parse(v); } catch { /* bad param: ignore */ } }
+      }
+      await player.load(new URL(src, location.href).href, { autoplay: true, view: initialView });
 
       const timeline = document.getElementById("timeline");
       const play = document.getElementById("play");
@@ -182,6 +188,34 @@
       holdButton(document.getElementById("rollL"), -30 * DEG);
       holdButton(document.getElementById("rollR"), 30 * DEG);
       rollinfo.onclick = () => { player.camera.rotateRoll(-player.camera.roll); showRoll(); };
+
+      // view export/import: click ⤓ view to copy the current camera as JSON
+      // (+ a shareable ?view= link); open such a link to restore the view.
+      const viewExport = document.getElementById("viewexport");
+      viewExport.onclick = async () => {
+        if (!player.state.loaded) return;
+        const cam = player.camera;
+        const snap = cam.snapshot();
+        const view = {
+          eye: snap.eye.map((v) => +v.toFixed(4)),
+          target: cam.target.map((v) => +v.toFixed(4)),
+          up: [cam.basis[3], cam.basis[4], cam.basis[5]].map((v) => +v.toFixed(4)),
+          fov: +(cam.fov * 180 / Math.PI).toFixed(2),
+        };
+        const json = JSON.stringify(view);
+        const link = new URL(location.href);
+        link.searchParams.set("view", json);
+        try {
+          await navigator.clipboard.writeText(json + "\n" + link.href);
+          viewExport.textContent = "copied!";
+          setTimeout(() => (viewExport.textContent = "⤓ view"), 1500);
+        } catch {
+          // clipboard may be blocked: fall back to a prompt so the user can copy
+          window.prompt("Camera view (JSON + shareable URL):", json + "\n" + link.href);
+        }
+        console.log("[view]", json);
+        console.log("[view-url]", link.href);
+      };
 
     </script>
   </body>
