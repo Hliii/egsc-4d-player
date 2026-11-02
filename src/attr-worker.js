@@ -4,6 +4,7 @@
 import { decompress as zstdDecompress } from "./vendor/fzstd.mjs";
 
 const F = Math.fround;
+const rec_quant_patches = (recon) => recon.quant.patches;
 const isNode = typeof process !== "undefined" && process.versions?.node;
 let nodePort = null;
 if (isNode) ({ parentPort: nodePort } = await import("node:worker_threads"));
@@ -56,19 +57,25 @@ async function onDecode({ data }) {
         }
     } else {
       if (recon.isOpacity) opacity64 = new Float64Array(N);
+      // Precompute per-point min/range for every channel once (vectorized
+      // expansion of the patch table), then a single flat loop. Numerically
+      // identical: same f32 division, f64 multiply-add, single fround.
+      const mins = new Float64Array(N * C);
+      const rngs = new Float64Array(N * C);
       let off = 0;
-      for (const p of recon.quant.patches) {
-        const rng = new Float64Array(C);
-        for (let c = 0; c < C; c++) rng[c] = p.max[c] - p.min[c] + 1e-6;
+      for (const p of rec_quant_patches(recon)) {
         for (let n = off; n < off + p.size; n++)
           for (let c = 0; c < C; c++) {
-            const t1 = F(codes[n * C + c] / levels);
-            const v = t1 * rng[c] + p.min[c];
-            if (opacity64) opacity64[n] = v;
-            out[n * C + c] = F(v);
+            const i = n * C + c;
+            mins[i] = p.min[c];
+            rngs[i] = p.max[c] - p.min[c] + 1e-6;
           }
         off += p.size;
       }
+      for (let i = 0; i < N * C; i++) {
+        out[i] = F(F(codes[i] / levels) * rngs[i] + mins[i]);
+      }
+      // opacity always quantizes minmax; the patch branch never emits opacity64
     }
     const transfer = [out.buffer];
     if (opacity64) transfer.push(opacity64.buffer);

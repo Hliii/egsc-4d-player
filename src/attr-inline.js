@@ -42,19 +42,21 @@ export function attrDecodeInline(name, streams, rec, N) {
         out[n * C + c] = F(v);
       }
   } else {
+    // Vectorized patch dequant (identical math/order to the worker path).
+    const mins = new Float64Array(N * C);
+    const rngs = new Float64Array(N * C);
     let off = 0;
     for (const p of rec.quant.patches) {
-      const rng = new Float64Array(C);
-      for (let c = 0; c < C; c++) rng[c] = p.max[c] - p.min[c] + 1e-6;
       for (let n = off; n < off + p.size; n++)
         for (let c = 0; c < C; c++) {
-          const t1 = F(codes[n * C + c] / levels);
-          const v = t1 * rng[c] + p.min[c];
-          if (opacity64) opacity64[n] = v;
-          out[n * C + c] = F(v);
+          const i = n * C + c;
+          mins[i] = p.min[c];
+          rngs[i] = p.max[c] - p.min[c] + 1e-6;
         }
       off += p.size;
     }
+    for (let i = 0; i < N * C; i++)
+      out[i] = F(F(codes[i] / levels) * rngs[i] + mins[i]);
   }
   return { out, opacity64 };
 }

@@ -16,7 +16,57 @@ import { parseEGSC, parseAstcHeader } from "./egsc.js";
 import { covarianceFromQuaternion } from "./ftgs.js";
 import { createModuleWorker } from "./worker.js";
 
+/** Chunked model assembly in a worker pool (fallback: inline). */
+function dispatchModelChunk(data) {
+  return new Promise((resolve, reject) => {
+    const w = createModuleWorker(new URL("./model-worker.js", import.meta.url));
+    w.onmessage = ({ data: r }) => { w.terminate(); resolve(r); };
+    w.onerror = (e) => { w.terminate(); reject(new Error(`model worker: ${e.message}`)); };
+    // Only transfer the chunk's own slice of each attribute (rows
+    // [start, end)); one standalone buffer per array per chunk.
+    const layout = { // per-row component count
+      means: 3, velocity: 3, time: 1, logDuration: 1, opacity: 1,
+      scaling: 3, rotation: 4, sh0: 3,
+    };
+    const msg = { type: "chunk", start: data.start, end: data.end,
+      coefficients: data.coefficients, minDuration: data.minDuration };
+    const transfer = [];
+    for (const [k, C] of Object.entries(layout)) {
+      const arr = data[k];
+      if (!arr) { msg[k] = null; continue; }
+      const from = data.start * C, to = data.end * C;
+      const copy = arr.constructor.from(arr.subarray(from, to));
+      msg[k] = copy;
+      transfer.push(copy.buffer);
+    }
+    // shN: per point 3*K values (K = coefficients - 1)
+    if (data.shN) {
+      const K = data.coefficients - 1;
+      const from = data.start * 3 * K, to = data.end * 3 * K;
+      const copy = Float32Array.from(data.shN.subarray(from, to));
+      msg.shN = copy;
+      transfer.push(copy.buffer);
+    }
+    w.postMessage(msg, transfer);
+  });
+}
+
 const F = Math.fround;
+
+/** Texture depack+dequant in a worker (parallel with the attr pool). */
+function dispatchTex(img, meta, rec, N) {
+  return new Promise((resolve, reject) => {
+    const w = createModuleWorker(new URL("./tex-worker.js", import.meta.url));
+    w.onmessage = ({ data }) => {
+      w.terminate();
+      if (data.type === "done") resolve(data.out);
+      else reject(new Error(data.message));
+    };
+    w.onerror = (e) => { w.terminate(); reject(new Error(`tex worker: ${e.message}`)); };
+    const copy = Uint8Array.from(img);  // img may be a subarray/view
+    w.postMessage({ type: "tex", img: copy, meta, rec, N }, [copy.buffer]);
+  });
+}
 
 function dispatchAttr(name, streams, rec, N) {
   // streams: [{data (Uint8Array subarray of the bitstream), byteshift, entropy}]
@@ -62,9 +112,10 @@ async function decodeSubset(egsc, subset, decodeAstc, timings, opts = {}) {
     });
   }
 
-  // ---- 2. texture: ASTC decode + depack (coordinator) ----
-  let texCodes = null, texRec = null;
-  if (texStream) {
+  // ---- 2. texture: ASTC decode (coordinator) -> depack+dequant (worker) ----
+  let texOut = null, texAttr = null;
+  const texJob = (async () => {
+    if (!texStream) return;
     let t = Date.now();
     const raw = texStream.meta.entropy
       ? (await import("./vendor/fzstd.mjs")).decompress(texStream.data)
@@ -76,80 +127,46 @@ async function decodeSubset(egsc, subset, decodeAstc, timings, opts = {}) {
     t = Date.now();
     const meta = texStream.meta;
     const rec = recon[texStream.attrName];
-    const q = new Int32Array(N * rec.component);
-    const bs = meta.blockSize;
-    const d0stride = meta.regionW * bs;
-    const d2stride = bs * bs;
-    for (let k = 0; k < meta.regions.length; k++) {
-      const [tlx, tly] = meta.regions[k];
-      const col = tlx / meta.regionW, row = tly / meta.regionH;
-      const cOff = meta.chanNum * k;
-      for (let tr = 0; tr < meta.regionH; tr++) {
-        const d0 = (tr / bs) | 0, d1 = tr % bs;
-        const imgRow = row * meta.regionH + tr;
-        for (let tc = 0; tc < meta.regionW; tc++) {
-          const d2 = (tc / bs) | 0, d3 = tc % bs;
-          const imgCol = col * meta.regionW + tc;
-          const n = d0 * d0stride + d2 * d2stride + d1 * bs + d3;
-          const p = (imgRow * meta.width + imgCol) * 4;
-          const b = n * rec.component + cOff;
-          q[b] = img[p]; q[b + 1] = img[p + 1]; q[b + 2] = img[p + 2];
-        }
-      }
+    let out;
+    if (useWorkers) {
+      out = await dispatchTex(img, meta, rec, N);
+    } else {
+      // inline fallback: same math as tex-worker
+      const { texDecodeInline } = await import("./tex-inline.js");
+      out = texDecodeInline(img, meta, rec, N);
     }
     timings.depack += Date.now() - t;
-    texCodes = q;
-    texRec = rec;
-  }
+    texOut = out;
+    texAttr = texStream.attrName;
+  })();
 
-  // ---- 3. entropy attributes: workers (zstd+merge+DPCM+dequant) ----
+  // ---- 3. entropy attributes: workers (zstd+merge+DPCM+dequant), in
+  // parallel with the texture job above ----
   const t = Date.now();
   const entries = [...byAttr.entries()];
   let attrResults;
   if (useWorkers) {
-    attrResults = await Promise.all(
-      entries.map(([name, list]) => dispatchAttr(name, list, recon[name], N)),
-    );
+    attrResults = await Promise.all([
+      texJob,
+      ...entries.map(([name, list]) => dispatchAttr(name, list, recon[name], N)),
+    ]);
   } else {
-    // inline path (Node tests without Worker): same math as attr-worker
     const { attrDecodeInline } = await import("./attr-inline.js");
-    attrResults = entries.map(([name, list]) =>
-      attrDecodeInline(name, list, recon[name], N));
+    await texJob;
+    attrResults = [
+      undefined,
+      ...entries.map(([name, list]) => attrDecodeInline(name, list, recon[name], N)),
+    ];
   }
   timings.attrs = (timings.attrs ?? 0) + (Date.now() - t);
 
   const splats = {};
   let opacity64 = null;
+  if (texOut) splats[texAttr] = texOut;
   for (let i = 0; i < entries.length; i++) {
     const [name] = entries[i];
-    splats[name] = attrResults[i].out;
-    if (attrResults[i].opacity64) opacity64 = attrResults[i].opacity64;
-  }
-  // texture attribute dequant (kept inline: patch quant over Int32 codes)
-  if (texCodes) {
-    const rec = texRec;
-    const levels = 2 ** rec.bits - 1;
-    const C = rec.component;
-    const out = new Float32Array(N * C);
-    if (rec.quant.kind === "minmax") {
-      const mn = rec.quant.min, mx = rec.quant.max;
-      const rng = new Float64Array(C);
-      for (let c = 0; c < C; c++) rng[c] = mx[c] - mn[c] + 1e-6;
-      for (let n = 0; n < N; n++)
-        for (let c = 0; c < C; c++)
-          out[n * C + c] = F(F(texCodes[n * C + c] / levels) * rng[c] + mn[c]);
-    } else {
-      let off = 0;
-      for (const p of rec.quant.patches) {
-        const rng = new Float64Array(C);
-        for (let c = 0; c < C; c++) rng[c] = p.max[c] - p.min[c] + 1e-6;
-        for (let n = off; n < off + p.size; n++)
-          for (let c = 0; c < C; c++)
-            out[n * C + c] = F(F(texCodes[n * C + c] / levels) * rng[c] + p.min[c]);
-        off += p.size;
-      }
-    }
-    splats[texStream.attrName] = out;
+    splats[name] = attrResults[i + 1].out;
+    if (attrResults[i + 1].opacity64) opacity64 = attrResults[i + 1].opacity64;
   }
 
   // features_rest depack layout is coef-major (k*3+ch, mirrors the (N,15,3)
@@ -198,8 +215,9 @@ export async function decodeEGSC(bytes, opts = {}) {
   return { splats: subset, shDegree: egsc.shDegree, timings };
 }
 
-/** Convert decoded splats to the player model contract (see ftgs.js). */
-export function splatToPlayerModel(splats, meta = {}) {
+/** Convert decoded splats to the player model contract (see ftgs.js).
+ *  Chunk-parallel across a worker pool when available; inline fallback. */
+export async function splatToPlayerModel(splats, meta = {}) {
   const count = splats.count;
   const degree = meta.shDegree ?? 3;
   const coefficients = (degree + 1) ** 2;
@@ -218,34 +236,63 @@ export function splatToPlayerModel(splats, meta = {}) {
     sh: new Float32Array(count * coefficients * 4),
     alpha: new Float32Array(count),
   };
-  for (let i = 0; i < count; i++) {
-    const o4 = i * 4, o3 = i * 3;
-    model.positionTime[o4] = splats.means[o3];
-    model.positionTime[o4 + 1] = splats.means[o3 + 1];
-    model.positionTime[o4 + 2] = splats.means[o3 + 2];
-    model.positionTime[o4 + 3] = splats.time[i];
-    const duration = Math.max(minDuration, Math.exp(splats.log_duration[i]));
-    model.velocityDuration[o4] = splats.velocity[o3];
-    model.velocityDuration[o4 + 1] = splats.velocity[o3 + 1];
-    model.velocityDuration[o4 + 2] = splats.velocity[o3 + 2];
-    model.velocityDuration[o4 + 3] = duration;
-    const cov = covarianceFromQuaternion(
-      [splats.rotation[i * 4], splats.rotation[i * 4 + 1], splats.rotation[i * 4 + 2], splats.rotation[i * 4 + 3]],
-      [splats.scaling[o3], splats.scaling[o3 + 1], splats.scaling[o3 + 2]],
-    );
-    model.covarianceA.set(cov.slice(0, 4), o4);
-    const alpha = 1 / (1 + Math.exp(-splats.opacity[i]));
-    model.covarianceB.set([cov[4], cov[5], alpha, 0], o4);
-    model.alpha[i] = alpha;
-    for (let coefficient = 0; coefficient < coefficients; coefficient++) {
-      for (let channel = 0; channel < 3; channel++) {
-        const v = coefficient === 0
-          ? splats.features_dc[i * 3 + channel]
-          : splats.features_rest[i * 45 + channel * (coefficients - 1) + coefficient - 1];
-        model.sh[(i * coefficients + coefficient) * 4 + channel] = v;
+  const useWorkers = typeof Worker === "function" && count >= 65536;
+  if (useWorkers) {
+    const CH = 8;
+    const per = Math.ceil(count / CH);
+    const chunks = [];
+    for (let c = 0; c < CH; c++) {
+      const start = c * per;
+      if (start >= count) break;
+      const end = Math.min(count, start + per);
+      chunks.push({ type: "chunk", start, end,
+        means: splats.means, velocity: splats.velocity, time: splats.time,
+        logDuration: splats.log_duration, opacity: splats.opacity,
+        scaling: splats.scaling, rotation: splats.rotation,
+        sh0: splats.features_dc, shN: splats.features_rest,
+        coefficients, minDuration });
+    }
+    const results = await Promise.all(chunks.map(dispatchModelChunk));
+    for (const r of results) {
+      model.positionTime.set(r.positionTime, r.start * 4);
+      model.velocityDuration.set(r.velocityDuration, r.start * 4);
+      model.covarianceA.set(r.covarianceA, r.start * 4);
+      model.covarianceB.set(r.covarianceB, r.start * 4);
+      model.sh.set(r.sh, r.start * coefficients * 4);
+      model.alpha.set(r.alpha, r.start);
+    }
+  } else {
+    const K = coefficients - 1;
+    for (let i = 0; i < count; i++) {
+      const o4 = i * 4, o3 = i * 3;
+      model.positionTime[o4] = splats.means[o3];
+      model.positionTime[o4 + 1] = splats.means[o3 + 1];
+      model.positionTime[o4 + 2] = splats.means[o3 + 2];
+      model.positionTime[o4 + 3] = splats.time[i];
+      const duration = Math.max(minDuration, Math.exp(splats.log_duration[i]));
+      model.velocityDuration[o4] = splats.velocity[o3];
+      model.velocityDuration[o4 + 1] = splats.velocity[o3 + 1];
+      model.velocityDuration[o4 + 2] = splats.velocity[o3 + 2];
+      model.velocityDuration[o4 + 3] = duration;
+      const cov = covarianceFromQuaternion(
+        [splats.rotation[i * 4], splats.rotation[i * 4 + 1], splats.rotation[i * 4 + 2], splats.rotation[i * 4 + 3]],
+        [splats.scaling[o3], splats.scaling[o3 + 1], splats.scaling[o3 + 2]],
+      );
+      model.covarianceA.set(cov.slice(0, 4), o4);
+      const alpha = 1 / (1 + Math.exp(-splats.opacity[i]));
+      model.covarianceB.set([cov[4], cov[5], alpha, 0], o4);
+      model.alpha[i] = alpha;
+      for (let coefficient = 0; coefficient < coefficients; coefficient++) {
+        for (let channel = 0; channel < 3; channel++) {
+          const v = coefficient === 0
+            ? splats.features_dc[i * 3 + channel]
+            : splats.features_rest[i * 45 + channel * (coefficients - 1) + coefficient - 1];
+          model.sh[(i * coefficients + coefficient) * 4 + channel] = v;
+        }
       }
     }
   }
+
   // bounds (central 98%, as in readFTGS)
   const axes = [[], [], []];
   const step = Math.max(1, Math.floor(count / 4 / 8192));

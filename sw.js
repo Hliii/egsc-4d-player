@@ -6,7 +6,7 @@
 // - fetch: cache-first for same-origin GETs (stale-while-revalidate for the
 //   HTML shells), so after the first load everything works with zero network.
 
-const CACHE = "egsc-4d-v4";
+const CACHE = "egsc-4d-v5";
 const SHELL = [
   "examples/egsc-demo.html",
   "src/index.js",
@@ -26,6 +26,9 @@ const SHELL = [
   "src/egsc-loader.js",
   "src/attr-worker.js",
   "src/attr-inline.js",
+  "src/model-worker.js",
+  "src/tex-worker.js",
+  "src/tex-inline.js",
   "src/astc-worker.js",
   "src/vendor/fzstd.mjs",
   "src/vendor/texture2ddecoder.mjs",
