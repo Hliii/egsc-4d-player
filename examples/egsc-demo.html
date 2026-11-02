@@ -54,6 +54,48 @@
       const t0 = performance.now();
       let decodeMs = null;
 
+      // PWA: register the service worker early (offline cache). Must be
+      // http(s) (or localhost); file:// silently skips. Runs in parallel with
+      // the scene load; on first visit it reloads the page once the SW is
+      // active so the app shell + scene land in the cache.
+      (async () => {
+        if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+        try {
+          await navigator.serviceWorker.register(
+            new URL("../sw.js", location.href).href,
+            { scope: new URL("../", location.href).href },
+          );
+          let offlineShown = false;
+          const offlineReady = () => {
+            if (offlineShown) return;
+            offlineShown = true;
+            timing.textContent = `${timing.textContent.replace(/ \| offline ready$/, "")} | offline ready`;
+          };
+          await navigator.serviceWorker.ready;
+          if (!navigator.serviceWorker.controller) {
+            location.reload();
+            return;
+          }
+          const warm = async () => {
+            try {
+              const names = (await caches.keys()).filter((n) => n.startsWith("egsc-4d-"));
+              for (const name of names) {
+                const cache = await caches.open(name);
+                if (await cache.match(new URL("./assets/scene.egsc", location.href).href)) {
+                  offlineReady();
+                  return;
+                }
+              }
+              await fetch(new URL("./assets/scene.egsc", location.href).href);
+              offlineReady();
+            } catch { /* best effort */ }
+          };
+          await warm();
+        } catch (e) {
+          console.warn("service worker unavailable:", e);
+        }
+      })();
+
       const player = new FTGSPlayer(document.getElementById("scene"), {
         maxPoints: query.get("points") === "all" ? Infinity : 1000000,
         frames: query.get("frames") ? Number(query.get("frames")) : undefined,
@@ -141,50 +183,6 @@
       holdButton(document.getElementById("rollR"), 30 * DEG);
       rollinfo.onclick = () => { player.camera.rotateRoll(-player.camera.roll); showRoll(); };
 
-      // PWA: register the service worker (offline cache). Must be served over
-      // http(s) (or localhost); file:// silently skips.
-      if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        try {
-          const reg = await navigator.serviceWorker.register(
-            new URL("../sw.js", location.href).href,
-            { scope: new URL("../", location.href).href },
-          );
-          // surface install/offline state once
-          let offlineShown = false;
-          const offlineReady = () => {
-            if (offlineShown) return;
-            offlineShown = true;
-            timing.textContent = `${timing.textContent.replace(/ \| offline ready$/, "")} | offline ready`;
-          };
-          const warm = async () => {
-            try {
-              // cache names evolve with sw.js CACHE version; probe any egsc cache
-              const names = (await caches.keys()).filter((n) => n.startsWith("egsc-4d-"));
-              for (const name of names) {
-                const cache = await caches.open(name);
-                if (await cache.match(new URL("./assets/scene.egsc", location.href).href)) {
-                  offlineReady();
-                  return;
-                }
-              }
-              // fetch the scene once so the SW caches it (streamed to disk)
-              await fetch(new URL("./assets/scene.egsc", location.href).href);
-              offlineReady();
-            } catch { /* best effort */ }
-          };
-          await navigator.serviceWorker.ready;
-          if (!navigator.serviceWorker.controller) {
-            // First visit: this page loaded before the SW was registered, so
-            // the SW cannot cache it. Reload once (now instant: HTTP cache) to
-            // bring the page under SW control.
-            location.reload();
-          } else {
-            warm();
-          }
-        } catch (e) {
-          console.warn("service worker unavailable:", e);
-        }
-      }
     </script>
   </body>
 </html>
