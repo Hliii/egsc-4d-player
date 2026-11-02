@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#101010"/>
+  <g transform="translate(256 256)">
+    <!-- stylized 4D gaussian: three anisotropic blobs along a time axis -->
+    <ellipse cx="-110" cy="10" rx="34" ry="22" fill="#1f6f5c" transform="rotate(-14 -110 10)"/>
+    <ellipse cx="0" cy="-14" rx="52" ry="34" fill="#37c9a0" transform="rotate(8 0 -14)"/>
+    <ellipse cx="110" cy="8" rx="30" ry="20" fill="#1f6f5c" transform="rotate(-10 110 8)"/>
+    <!-- time axis -->
+    <line x1="-190" y1="46" x2="190" y2="46" stroke="#2f6f5f" stroke-width="10" stroke-linecap="round" opacity="0.55"/>
+    <path d="M170 30 L198 46 L170 62 Z" fill="#2f6f5f" opacity="0.8"/>
+    <!-- motion trails -->
+    <path d="M-76 -12 Q -40 -30 0 -26" stroke="#37c9a0" stroke-width="6" fill="none" opacity="0.45" stroke-linecap="round"/>
+    <path d="M36 -20 Q 72 -8 96 -2" stroke="#37c9a0" stroke-width="6" fill="none" opacity="0.45" stroke-linecap="round"/>
+  </g>
+  <text x="256" y="472" text-anchor="middle" font-family="system-ui, sans-serif" font-size="64" font-weight="700" fill="#e8f7f1">4D</text>
+</svg>

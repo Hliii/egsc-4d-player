@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>EGSC 4D Scene Demo</title>
+    <link rel="icon" href="data:," />
+    <link rel="manifest" href="../egsc-pwa/manifest.json" />
+    <meta name="theme-color" content="#101010" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <style>
+      body { margin: 0; background: #101010; color: #eee; font: 14px/1.5 system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+      header { padding: 8px 16px; display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; flex: none; }
+      h1 { font-size: 16px; margin: 0; }
+      #status { color: #8fd; }
+      canvas { display: block; width: 100vw; flex: 1 1 auto; min-height: 120px; touch-action: none; }
+      #controls { display: flex; gap: 8px; align-items: center; padding: 8px 16px; flex-wrap: wrap; flex: none; }
+      button { background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 6px 14px; cursor: pointer; touch-action: manipulation; }
+      button.hold { user-select: none; -webkit-user-select: none; padding: 6px 12px; }
+      input[type="range"] { flex: 1; min-width: 200px; }
+      #timing { font-family: ui-monospace, monospace; font-size: 12px; }
+      #rollinfo { font-family: ui-monospace, monospace; font-size: 12px; color: #8fd; cursor: pointer; user-select: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>EGSC 4D Scene</h1>
+      <span id="status">loading…</span>
+      <span id="timing"></span>
+    </header>
+    <canvas id="scene" aria-label="4D scene"></canvas>
+    <div id="controls">
+      <button id="play">Play / pause</button>
+      <button id="rollL" class="hold" title="Roll counter-clockwise (hold to spin, tap for a step)">↺</button>
+      <span id="rollinfo" title="Click to reset roll">roll 0°</span>
+      <button id="rollR" class="hold" title="Roll clockwise (hold to spin, tap for a step)">↻</button>
+      <select id="rate" aria-label="Playback speed" title="Playback speed">
+        <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+        <option value="0.75">0.75×</option><option value="1" selected>1×</option>
+        <option value="1.5">1.5×</option><option value="2">2×</option>
+        <option value="4">4×</option>
+      </select>
+      <input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Time" />
+    </div>
+    <script type="module">
+      import { FTGSPlayer } from "../src/index.js";
+
+      const status = document.getElementById("status");
+      const timing = document.getElementById("timing");
+      const query = new URLSearchParams(location.search);
+      const src = query.get("src") ?? "./assets/scene.egsc";
+      const t0 = performance.now();
+      let decodeMs = null;
+
+      const player = new FTGSPlayer(document.getElementById("scene"), {
+        maxPoints: query.get("points") === "all" ? Infinity : 1000000,
+        frames: query.get("frames") ? Number(query.get("frames")) : undefined,
+        fps: query.get("fps") ? Number(query.get("fps")) : undefined,
+      });
+      player.addEventListener("progress", (e) => {
+        const p = e.detail?.progress ?? 0;
+        status.textContent = `decoding… ${(p * 100).toFixed(0)}%`;
+      });
+      player.addEventListener("loaded", (e) => {
+        decodeMs = performance.now() - t0;
+        status.textContent = `ready — ${(e.detail?.pointCount ?? 0).toLocaleString()} Gaussians`;
+        timing.textContent = `load+decode: ${(decodeMs / 1000).toFixed(2)} s`;
+        player.play();
+      });
+      player.addEventListener("error", (e) => {
+        status.textContent = `error: ${e.detail?.error ?? "see console"}`;
+      });
+      await player.load(new URL(src, location.href).href, { autoplay: true });
+
+      const timeline = document.getElementById("timeline");
+      const play = document.getElementById("play");
+      play.onclick = () => (player.playing ? player.pause() : player.play());
+      timeline.oninput = () => player.seek(Number(timeline.value) * player.duration);
+
+      // playback speed: select + keyboard > / < (step through the options)
+      const rate = document.getElementById("rate");
+      const RATES = [0.25, 0.5, 0.75, 1, 1.5, 2, 4];
+      rate.onchange = () => player.setPlaybackRate(Number(rate.value));
+      const stepRate = (dir) => {
+        const cur = Number(rate.value);
+        const i = Math.max(0, Math.min(RATES.length - 1, RATES.indexOf(cur) + dir));
+        rate.value = String(RATES[i]);
+        player.setPlaybackRate(RATES[i]);
+      };
+      window.addEventListener("keydown", (e) => {
+        if (e.target instanceof HTMLSelectElement) return;
+        if (e.key === "+" || e.key === "=") { e.preventDefault(); stepRate(1); }
+        else if (e.key === "-" || e.key === "_") { e.preventDefault(); stepRate(-1); }
+      });
+      player.addEventListener("timeupdate", () => {
+        timeline.value = player.duration ? player.time / player.duration : 0;
+      });
+
+      // camera roll: hold-to-spin buttons (touch friendly), tap = 2° step,
+      // rollinfo click = reset, keyboard , / . on a focused canvas.
+      const rollinfo = document.getElementById("rollinfo");
+      const DEG = Math.PI / 180;
+      const showRoll = () => {
+        const deg = Math.round(((player.camera.roll ?? 0) / DEG) * 10) / 10;
+        rollinfo.textContent = `roll ${deg}°`;
+      };
+      player.addEventListener("timeupdate", showRoll);
+      player.addEventListener("loaded", showRoll);
+      const holdButton = (el, rate) => {
+        let raf = 0, last = 0, downAt = 0, moved = false;
+        const step = (now) => {
+          const dt = Math.min(0.05, (now - last) / 1000);
+          last = now;
+          player.camera.rotateRoll(rate * dt);
+          if ((performance.now() - downAt) / 1000 * Math.abs(rate) > 1.5 * DEG) moved = true;
+          showRoll();
+          raf = requestAnimationFrame(step);
+        };
+        const start = (e) => {
+          e.preventDefault();
+          downAt = performance.now();
+          moved = false;
+          last = performance.now();
+          raf = requestAnimationFrame(step);
+        };
+        const stop = () => {
+          if (raf) cancelAnimationFrame(raf);
+          raf = 0;
+          if (!moved) {
+            player.camera.rotateRoll(2 * DEG * Math.sign(rate));
+            showRoll();
+          }
+        };
+        el.addEventListener("pointerdown", start);
+        for (const ev of ["pointerup", "pointercancel", "pointerleave"])
+          el.addEventListener(ev, stop);
+      };
+      holdButton(document.getElementById("rollL"), -30 * DEG);
+      holdButton(document.getElementById("rollR"), 30 * DEG);
+      rollinfo.onclick = () => { player.camera.rotateRoll(-player.camera.roll); showRoll(); };
+
+      // PWA: register the service worker (offline cache). Must be served over
+      // http(s) (or localhost); file:// silently skips.
+      if ("serviceWorker" in navigator && location.protocol !== "file:") {
+        try {
+          const reg = await navigator.serviceWorker.register(
+            new URL("../sw.js", location.href).href,
+            { scope: new URL("../", location.href).href },
+          );
+          // surface install/offline state once
+          let offlineShown = false;
+          const offlineReady = () => {
+            if (offlineShown) return;
+            offlineShown = true;
+            timing.textContent = `${timing.textContent.replace(/ \| offline ready$/, "")} | offline ready`;
+          };
+          const warm = async () => {
+            try {
+              const cache = await caches.open("egsc-4d-v1");
+              if (await cache.match(new URL("./assets/scene.egsc", location.href).href))
+                offlineReady();
+              else {
+                // fetch the scene once so the SW caches it (streamed to disk)
+                await fetch(new URL("./assets/scene.egsc", location.href).href);
+                offlineReady();
+              }
+            } catch { /* offline warmup is best effort */ }
+          };
+          await navigator.serviceWorker.ready;
+          warm();
+        } catch (e) {
+          console.warn("service worker unavailable:", e);
+        }
+      }
+    </script>
+  </body>
+</html>

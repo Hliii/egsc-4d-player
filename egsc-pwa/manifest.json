@@ -1,0 +1,16 @@
+{
+  "name": "EGSC 4D Player",
+  "short_name": "EGSC 4D",
+  "description": "Offline-capable EGSC 4D Gaussian scene player (FreeTimeGS/A3DGS)",
+  "start_url": "../examples/egsc-demo.html",
+  "scope": "../",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#101010",
+  "theme_color": "#101010",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
