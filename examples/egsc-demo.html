@@ -29,6 +29,7 @@
       <h1>EGSC 4D Scene</h1>
       <span id="status">loading…</span>
       <span id="timing"></span>
+      <span id="fps" title="Rendered frames per second" style="font-family:ui-monospace,monospace;font-size:12px;color:#8fd">— FPS</span>
     </header>
     <canvas id="scene" aria-label="4D scene"></canvas>
     <div id="controls">
@@ -127,6 +128,29 @@
         if (v) { try { initialView = JSON.parse(v); } catch { /* bad param: ignore */ } }
       }
       await player.load(new URL(src, location.href).href, { autoplay: true, view: initialView });
+
+      // FPS meter: counts actual splat renders (SplatRenderer.draw calls),
+      // not display refresh — a static scene shows the true render idle state.
+      {
+        const fpsEl = document.getElementById("fps");
+        let draws = 0, last = performance.now();
+        const { SplatRenderer } = await import("../src/renderer.js");
+        const origDraw = SplatRenderer.prototype.draw;
+        SplatRenderer.prototype.draw = function (...args) {
+          draws++;
+          return origDraw.apply(this, args);
+        };
+        const loop = (now) => {
+          if (now - last >= 500) {
+            const fps = (draws * 1000) / (now - last);
+            fpsEl.textContent = `${fps.toFixed(0)} FPS`;
+            draws = 0;
+            last = now;
+          }
+          requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+      }
 
       const timeline = document.getElementById("timeline");
       const play = document.getElementById("play");
