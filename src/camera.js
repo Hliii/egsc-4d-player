@@ -313,11 +313,17 @@ export class OrbitCamera {
       const v = validateCameraView(view);
       return Math.hypot(...v.eye.map((x, i) => x - center.target[i]));
     };
+    let leash = 0;
+    for (const v of [reference, left, right, top, bottom, near, far]) {
+      const t = validateCameraView(v).target;
+      leash = Math.max(leash, Math.hypot(...t.map((x, i) => x - center.target[i])));
+    }
     this.viewLimits = {
       back0, r0, u0, anchor: [...center.target],
       panMin: angleOf(left).pan, panMax: angleOf(right).pan,
       tiltMin: angleOf(bottom).tilt, tiltMax: angleOf(top).tilt,
       dMin: distFromAnchor(near), dMax: distFromAnchor(far),
+      leash: leash * 1.2 + 1e-3,
     };
     this.#applyLimits();
     this.onChange?.();
@@ -342,22 +348,64 @@ export class OrbitCamera {
       const upHint = [this.basis[3], this.basis[4], this.basis[5]];
       this.#setBasis(b, upHint);
     }
-    // distance to the anchor: slide eye+target together onto the shell
-    const [bx, by, bz] = [this.basis[6], this.basis[7], this.basis[8]];
-    const eye = [
-      this.target[0] + bx * this.distance,
-      this.target[1] + by * this.distance,
-      this.target[2] + bz * this.distance,
-    ];
-    const d = Math.hypot(...eye.map((v, i) => v - L.anchor[i]));
-    const dC = Math.min(L.dMax, Math.max(L.dMin, d));
-    if (dC !== d && d > 1e-9) {
-      const shift = eye.map((v, i) => {
-        const dir = (v - L.anchor[i]) / d;
-        return L.anchor[i] + dir * dC - v;
-      });
-      for (let i = 0; i < 3; i++) this.target[i] += shift[i];
+    // 2. target leash: keep the look-at point near the anchor (every
+    // boundary view targets it). A runaway target — huge pan drags —
+    // drags the eye out of the shell and would collapse the camera
+    // distance in step 3; leashing first bounds every later correction.
+    // 3 passes: leash -> shell -> wall, each pass's output feeds the next.
+    for (let pass = 0; pass < 3; pass++) {
+      const tRel = this.target.map((v, i) => v - L.anchor[i]);
+      const tD = Math.hypot(...tRel);
+      if (tD > L.leash && tD > 1e-9) {
+        for (let i = 0; i < 3; i++)
+          this.target[i] = L.anchor[i] + (tRel[i] / tD) * L.leash;
+      }
+    // distance shell: adjust the CAMERA DISTANCE so the eye lands on the
+    // allowed [dMin, dMax] shell around the anchor. Moving the eye along
+    // its view axis (never sliding the target) keeps the look-at point
+    // stable — a radial slide used to drag the target ~100 units away on
+    // zoom-out, which later flipped the eye behind the scene.
+    for (let pass = 0; pass < 4; pass++) {
+      const [ax, ay, az] = [this.basis[6], this.basis[7], this.basis[8]];
+      const eye = [
+        this.target[0] + ax * this.distance,
+        this.target[1] + ay * this.distance,
+        this.target[2] + az * this.distance,
+      ];
+      const d = Math.hypot(...eye.map((v, i) => v - L.anchor[i]));
+      const dC = Math.min(L.dMax, Math.max(L.dMin, d));
+      if (dC === d) break;
+      this.distance = Math.max(1e-6, this.distance + dC - d);
     }
+    // eye angular wall: strafe (A/D), shift-drag pan and WASD translate
+    // eye+target with the view direction unchanged, so only the eye's
+    // bearing drifts. Rotate the eye back onto the wall and translate the
+    // target with it — view direction and roll stay exactly as they are.
+    {
+      const [bx, by, bz] = [this.basis[6], this.basis[7], this.basis[8]];
+      const eye = [
+        this.target[0] + bx * this.distance,
+        this.target[1] + by * this.distance,
+        this.target[2] + bz * this.distance,
+      ];
+      const rel = eye.map((v, i) => v - L.anchor[i]);
+      const d = Math.hypot(...rel);
+      if (d > 1e-9) {
+        const dir = rel.map((v) => v / d);
+        const panE = Math.atan2(dot(dir, L.r0), dot(dir, L.back0));
+        const tiltE = Math.atan2(dot(dir, L.u0), dot(dir, L.back0));
+        const panEC = Math.min(L.panMax, Math.max(L.panMin, panE));
+        const tiltEC = Math.min(L.tiltMax, Math.max(L.tiltMin, tiltE));
+        if (panEC !== panE || tiltEC !== tiltE) {
+          let v = rel;
+          if (panEC !== panE) v = rotAxis(v, L.u0, panEC - panE);
+          if (tiltEC !== tiltE) v = rotAxis(v, L.r0, -(tiltEC - tiltE));
+          for (let i = 0; i < 3; i++)
+            this.target[i] += L.anchor[i] + v[i] - eye[i];
+        }
+      }
+    }
+    } // pass loop
   }
   zoom(factor) {
     this.distance = Math.max(
