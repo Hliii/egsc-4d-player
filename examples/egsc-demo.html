@@ -117,6 +117,23 @@
         fps: query.get("fps") ? Number(query.get("fps")) : undefined,
       });
       window.__player = player; // console/debug handle
+      // roll readout: live from the camera basis (never stale). The old
+      // timeupdate-only refresh froze the readout when playback was paused
+      // and it "jumped" on the next event.
+      {
+        const rollEl = document.getElementById("rollinfo");
+        let lastRollText = "";
+        const showRollLive = () => {
+          const cam = player.camera;
+          if (!cam) return;
+          const deg = Math.round(cam.rollDegrees * 10) / 10;
+          const txt = `roll ${deg}°`;
+          if (txt !== lastRollText) { rollEl.textContent = txt; lastRollText = txt; }
+        };
+        player.addEventListener("loaded", showRollLive);
+        const rollWatch = () => { showRollLive(); requestAnimationFrame(rollWatch); };
+        requestAnimationFrame(rollWatch);
+      }
       player.addEventListener("progress", (e) => {
         const p = e.detail?.progress ?? 0;
         status.textContent = `decoding… ${(p * 100).toFixed(0)}%`;
@@ -205,14 +222,10 @@
 
       // camera roll: hold-to-spin buttons (touch friendly), tap = 2° step,
       // rollinfo click = reset, keyboard , / . on a focused canvas.
+      // (the readout itself is the live rAF loop above)
       const rollinfo = document.getElementById("rollinfo");
       const DEG = Math.PI / 180;
-      const showRoll = () => {
-        const deg = Math.round(((player.camera.roll ?? 0) / DEG) * 10) / 10;
-        rollinfo.textContent = `roll ${deg}°`;
-      };
-      player.addEventListener("timeupdate", showRoll);
-      player.addEventListener("loaded", showRoll);
+      const showRoll = () => {}; // readout handled live above
       const holdButton = (el, rate) => {
         let raf = 0, last = 0, downAt = 0, moved = false;
         const step = (now) => {

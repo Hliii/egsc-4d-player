@@ -208,14 +208,29 @@ export class OrbitCamera {
   }
   #setBasis(back, up) {
     // back must be unit; up only needs a rough direction (re-orthogonalized).
+    // If the up hint is close to the new back, rotating it ONTO the plane
+    // perpendicular to back keeps the roll more faithfully than the old
+    // world-axis fallback, which flipped the reconstructed up by 180° and
+    // made the roll readout jump.
     const b = unit(back);
     let u = up;
     const parallel = Math.abs(dot(b, u));
     if (parallel > 0.9999) {
-      // fall back to the least-aligned world axis
       const wu = this.#worldUp();
       u = Math.abs(dot(b, wu)) > 0.9 ? [1, 0, 0] : wu;
     }
+    // Gram-Schmidt: project u into the back-perpendicular plane. This is
+    // exact for roll preservation: the projected up differs from the true
+    // rolled up only in its back component, which the basis never stores.
+    const d = dot(b, u);
+    u = u.map((x, i) => x - d * b[i]);
+    const un = Math.hypot(...u);
+    u = un < 1e-9 ? (() => {
+      const wu = this.#worldUp();
+      const w = Math.abs(dot(b, wu)) > 0.9 ? [1, 0, 0] : wu;
+      const dd = dot(b, w);
+      return w.map((x, i) => x - dd * b[i]);
+    })() : u.map((x) => x / un);
     const right = unit(cross(u, b));
     const up2 = cross(b, right);
     this.basis = [...right, ...up2, ...b];
@@ -406,6 +421,10 @@ export class OrbitCamera {
       }
     }
     } // pass loop
+    // keep the exported .roll in sync with the basis after limit-driven
+    // basis rebuilds (the readout is live via rollDegrees, but .roll feeds
+    // view export and the demo's legacy listeners)
+    this.roll = this.#rollAngle;
   }
   zoom(factor) {
     this.distance = Math.max(
@@ -452,6 +471,11 @@ export class OrbitCamera {
     this.#rotateAroundLocal(2, delta);
     this.roll = this.#rollAngle;
     this.onChange?.();
+  }
+  /** Read-only live roll (degrees): derived from the basis on every read,
+   *  so orbit/zoom/pan updates can never leave a stale value behind. */
+  get rollDegrees() {
+    return (this.#rollAngle * 180) / Math.PI;
   }
   /** Reset the roll: rotate back to the reference up (the imported view's
    *  own tilt), NOT to world up. */
