@@ -117,6 +117,26 @@
         }
       })();
 
+      // Warm the FULL decode-time module graph from the page context.
+      // EdgeOne preview hosts authenticate via a cookie that is NOT attached
+      // to service-worker/worker/browser-internal fetches (SW precache
+      // ERR_FAILED, manifest 401, decode-worker import 401 -> "Failed to
+      // fetch dynamically imported module"). Page fetches carry the cookie,
+      // so pulling every lazily-imported module + the wasm into the HTTP
+      // cache here makes all later worker/SW requests cache hits.
+      const warmDecodeGraph = async () => {
+        const files = [
+          "egsc-loader.js", "egsc-model.js", "egsc-astc.js", "egsc.js", "ftgs.js",
+          "sort.js", "sort-worker.js", "attr-worker.js", "attr-inline.js",
+          "model-worker.js", "tex-worker.js", "tex-inline.js", "astc-worker.js",
+          "vendor/fzstd.mjs", "vendor/texture2ddecoder.mjs",
+          "vendor/wasm/texture2ddecoder.js", "vendor/wasm/texture2ddecoder.wasm",
+        ];
+        await Promise.all(files.map((f) =>
+          fetch(new URL("../src/" + f, location.href)).catch(() => {})));
+      };
+      await warmDecodeGraph();
+
       const player = new FTGSPlayer(document.getElementById("scene"), {
         maxPoints: query.get("points") === "all" ? Infinity : 1000000,
         frames: query.get("frames") ? Number(query.get("frames")) : undefined,
