@@ -16,13 +16,17 @@
       h1 { font-size: 16px; margin: 0; }
       #status { color: #8fd; }
       canvas { display: block; width: 100vw; flex: 1 1 auto; min-height: 120px; touch-action: none; }
-      /* Centered loading overlay: download (0-50%) + decode (50-100%) */
-      #bigload { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; pointer-events: none; background: radial-gradient(ellipse at center, rgba(16,16,16,0.55) 0%, rgba(16,16,16,0.0) 70%); z-index: 5; }
+      /* Centered loading overlay: separate download and decode rows */
+      #bigload { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; pointer-events: none; background: radial-gradient(ellipse at center, rgba(16,16,16,0.55) 0%, rgba(16,16,16,0.0) 70%); z-index: 5; }
       #bigload[hidden] { display: none; }
-      #bigload-label { color: #8fd; font: 600 14px/1 ui-monospace, monospace; letter-spacing: 0.08em; text-shadow: 0 1px 4px #000; }
-      #bigload-bar { width: min(46vw, 420px); height: 10px; border-radius: 6px; background: #222; border: 1px solid #3a4a44; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.6); }
-      #bigload-fill { height: 100%; width: 0%; border-radius: 5px; background: linear-gradient(90deg, #2f8f6f, #4fd); transition: width 0.15s ease-out; }
-      #bigload-pct { color: #9cc; font: 12px/1 ui-monospace, monospace; text-shadow: 0 1px 3px #000; }
+      #bigload-row { display: flex; align-items: center; gap: 10px; }
+      #bigload-row .ph { width: 88px; text-align: right; color: #667; font: 600 13px/1 ui-monospace, monospace; letter-spacing: 0.06em; text-shadow: 0 1px 3px #000; }
+      #bigload-row .ph.active { color: #8fd; }
+      #bigload-row .ph.done { color: #4f8; }
+      #bigload-row .bar { width: min(38vw, 340px); height: 9px; border-radius: 6px; background: #222; border: 1px solid #3a4a44; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.6); }
+      #bigload-row .fill { height: 100%; width: 0%; border-radius: 5px; background: linear-gradient(90deg, #2f8f6f, #4fd); transition: width 0.15s ease-out; }
+      #bigload-row .pct { width: 44px; color: #9cc; font: 12px/1 ui-monospace, monospace; text-shadow: 0 1px 3px #000; }
+      #bigload-label { margin-top: 6px; color: #8fd; font: 600 13px/1 ui-monospace, monospace; letter-spacing: 0.08em; text-shadow: 0 1px 4px #000; }
       #controls { display: flex; gap: 8px; align-items: center; padding: 8px 16px; flex-wrap: wrap; flex: none; }
       button { background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 6px 14px; cursor: pointer; touch-action: manipulation; }
       button.hold { user-select: none; -webkit-user-select: none; padding: 6px 12px; }
@@ -40,9 +44,17 @@
     </header>
     <canvas id="scene" aria-label="4D scene"></canvas>
     <div id="bigload" aria-hidden="true">
-      <div id="bigload-label">downloading…</div>
-      <div id="bigload-bar"><div id="bigload-fill"></div></div>
-      <div id="bigload-pct">0%</div>
+      <div id="bigload-row">
+        <span class="ph" id="ph-dl">download</span>
+        <div class="bar"><div class="fill" id="fill-dl"></div></div>
+        <span class="pct" id="pct-dl">0%</span>
+      </div>
+      <div id="bigload-row">
+        <span class="ph" id="ph-dc">decode</span>
+        <div class="bar"><div class="fill" id="fill-dc"></div></div>
+        <span class="pct" id="pct-dc">—</span>
+      </div>
+      <div id="bigload-label">loading model…</div>
     </div>
     <div id="controls">
       <button id="play">Play / pause</button>
@@ -148,12 +160,31 @@
       }
       player.addEventListener("progress", (e) => {
         const p = e.detail?.progress ?? 0;
-        status.textContent = p < 0.5 ? `downloading… ${(p / 0.5 * 100).toFixed(0)}%` : `decoding… ${((p - 0.5) / 0.5 * 100).toFixed(0)}%`;
-        const fill = document.getElementById("bigload-fill");
-        if (fill) {
-          fill.style.width = `${(p * 100).toFixed(1)}%`;
-          document.getElementById("bigload-label").textContent = p < 0.5 ? "downloading…" : "decoding…";
-          document.getElementById("bigload-pct").textContent = `${(p * 100).toFixed(0)}%`;
+        const phase = e.detail?.phase;
+        if (phase === "download") {
+          status.textContent = `downloading… ${(p * 100).toFixed(0)}%`;
+          const f = document.getElementById("fill-dl");
+          if (f) {
+            f.style.width = `${(p * 100).toFixed(1)}%`;
+            document.getElementById("pct-dl").textContent = `${(p * 100).toFixed(0)}%`;
+            document.getElementById("ph-dl").classList.add("active");
+          }
+        } else if (phase === "decode") {
+          status.textContent = `decoding… ${(p * 100).toFixed(0)}%`;
+          const f = document.getElementById("fill-dc");
+          if (f) {
+            // first decode event: finish the download row
+            const dl = document.getElementById("ph-dl");
+            if (!dl.classList.contains("done")) {
+              document.getElementById("fill-dl").style.width = "100%";
+              document.getElementById("pct-dl").textContent = "100%";
+              dl.classList.remove("active");
+              dl.classList.add("done");
+            }
+            f.style.width = `${(p * 100).toFixed(1)}%`;
+            document.getElementById("pct-dc").textContent = `${(p * 100).toFixed(0)}%`;
+            document.getElementById("ph-dc").classList.add("active");
+          }
         }
       });
       player.addEventListener("loaded", (e) => {

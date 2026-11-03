@@ -252,8 +252,10 @@ export class FTGSPlayer extends EventTarget {
         "Graphics context lost. Recreate the player to continue.",
       );
   }
-  #emit(type) {
-    this.dispatchEvent(new CustomEvent(type, { detail: this.state }));
+  #emit(type, extra) {
+    this.dispatchEvent(new CustomEvent(type, {
+      detail: { ...this.state, ...(extra ?? {}) },
+    }));
   }
   #fail(error) {
     void this.exitAR();
@@ -309,8 +311,8 @@ export class FTGSPlayer extends EventTarget {
             chunks.push(value);
             loaded += value.length;
             if (generation !== this.#generation) throw aborted();
-            this.#progress = Math.min(0.999, (loaded / total) * 0.5);
-            this.#emit("progress");
+            this.#progress = Math.min(0.999, loaded / total);
+            this.#emit("progress", { phase: "download", progress: this.#progress, loaded, total });
           }
           buffer = new ArrayBuffer(loaded);
           let off = 0;
@@ -339,9 +341,8 @@ export class FTGSPlayer extends EventTarget {
         signal: controller.signal,
         onProgress: (progress) => {
           if (generation !== this.#generation) return;
-          // decode occupies the second half of the progress bar (0.5..1)
-          this.#progress = 0.5 + progress * 0.5;
-          this.#emit("progress");
+          this.#progress = progress;
+          this.#emit("progress", { phase: "decode", progress });
         },
       });
       controller.signal.throwIfAborted();
