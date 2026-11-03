@@ -6,7 +6,7 @@
 // - fetch: cache-first for same-origin GETs (stale-while-revalidate for the
 //   HTML shells), so after the first load everything works with zero network.
 
-const CACHE = "egsc-4d-v23";
+const CACHE = "egsc-4d-v24";
 const SHELL = [
   "examples/egsc-demo.html",
   "src/index.js",
@@ -104,7 +104,22 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  // ?reload=1 on the page: reload=1 propagates to same-origin subresource
+  // fetches via the "reload" search param — bypass the cache for BOTH the
+  // read (network now) and the write (freshen the stored copy).
+  const force = url.searchParams.get("reload") === "1" || request.cache === "reload";
   const isHtml = request.destination === "document" || url.pathname.endsWith(".html");
+  if (force) {
+    event.respondWith(
+      fetch(request).then((response) => {
+        if (response.ok && !isHtml) {
+          caches.open(CACHE).then((c) => c.put(request, response.clone()).catch(() => {}));
+        }
+        return response;
+      }),
+    );
+    return;
+  }
   event.respondWith(
     isHtml ? htmlStrategy(request) : cacheFirst(request),
   );

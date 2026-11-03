@@ -75,19 +75,35 @@
       const status = document.getElementById("status");
       const timing = document.getElementById("timing");
       const query = new URLSearchParams(location.search);
-      // default scene: page-relative first (GitHub Pages /examples/…), then
-      // root-relative (EdgeOne serves this html at /) — probe with HEAD
+      // ?reload=1: force a real re-download of the scene (bypasses the SW
+      // cache for this load and freshens the stored copy). Removed from the
+      // address bar right away so share/reload stays clean.
+      const forceReload = query.get("reload") === "1";
+      if (forceReload) {
+        const kept = searchParamsKept();
+        history.replaceState(null, "", location.pathname + (kept ? "?" + kept : ""));
+      }
+      function searchParamsKept() {
+        const q = new URLSearchParams(location.search);
+        q.delete("reload");
+        return q.toString();
+      }
       const resolveSrc = async () => {
+        const reloadQ = forceReload ? "?reload=1" : "";
         for (const c of ["./assets/scene-v9.egsc", "examples/assets/scene-v9.egsc"]) {
           try {
-            if ((await fetch(new URL(c, location.href), { method: "HEAD" })).ok)
-              return new URL(c, location.href).href;
+            if ((await fetch(new URL(c + reloadQ, location.href), { method: "HEAD" })).ok)
+              return new URL(c + reloadQ, location.href).href;
           } catch { /* probe */ }
         }
-        return new URL("./assets/scene-v9.egsc", location.href).href;
+        return new URL("./assets/scene-v9.egsc" + reloadQ, location.href).href;
       };
       const src = query.get("src") ?? (await resolveSrc());
-      const sceneUrl = src;
+      // explicit ?src= + ?reload=1: append the reload flag so the SW bypasses
+      // the cache for that URL too
+      const loadUrl = new URL(src, location.href);
+      if (forceReload && !loadUrl.searchParams.has("reload")) loadUrl.searchParams.set("reload", "1");
+      const sceneUrl = loadUrl;
       const t0 = performance.now();
       let decodeMs = null;
 
@@ -222,7 +238,7 @@
         const v = query.get("view");
         if (v) { try { initialView = JSON.parse(v); } catch { /* bad param: ignore */ } }
       }
-      await player.load(new URL(src, location.href).href, { autoplay: true, view: initialView });
+      await player.load(loadUrl.href, { autoplay: true, view: initialView });
       player.camera?.setViewLimits?.(viewLimits);
 
       // FPS meter: counts actual splat renders (SplatRenderer.draw calls),
