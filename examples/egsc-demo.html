@@ -70,8 +70,8 @@
 
       // PWA: register the service worker early (offline cache). Must be
       // http(s) (or localhost); file:// silently skips. Runs in parallel with
-      // the scene load; on first visit it reloads the page once the SW is
-      // active so the app shell + scene land in the cache.
+      // the scene load; activate() claims this page and install() pre-caches
+      // the shell, so no first-visit reload is needed.
       (async () => {
         if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
         try {
@@ -86,10 +86,12 @@
             timing.textContent = `${timing.textContent.replace(/ \| offline ready$/, "")} | offline ready`;
           };
           await navigator.serviceWorker.ready;
-          if (!navigator.serviceWorker.controller) {
-            location.reload();
-            return;
-          }
+          // NOTE: no first-visit reload here. activate() calls clients.claim(),
+          // which takes control of this page immediately, and install()
+          // pre-caches the shell — a reload would abort in-flight dynamic
+          // module imports (egsc-loader.js) on first visit: exactly the
+          // "Failed to fetch dynamically imported module" seen on fresh
+          // origins (EdgeOne) while cached origins (GitHub) worked.
           const warm = async () => {
             try {
               const names = (await caches.keys()).filter((n) => n.startsWith("egsc-4d-"));
