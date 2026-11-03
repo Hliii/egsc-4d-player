@@ -46,12 +46,11 @@ function limitSplats(splats, maxPoints) {
 }
 
 export async function readEGSCModel(blob, options = {}) {
-  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const bytes = blob instanceof Uint8Array ? blob : new Uint8Array(await blob.arrayBuffer());
   options.onProgress?.(0.05);
   const meta = readTailMeta(bytes);
   const decodeAstc = createAstcDecoder({ wasmWorkers: 4 });
   const { splats, shDegree } = await decodeEGSC(bytes, { decodeAstc, onProgress: options.onProgress });
-  options.onProgress?.(0.9);
   const limited = limitSplats(splats, options.maxPoints ?? 1000000);
   const model = splatToPlayerModel(limited, {
     shDegree,
@@ -59,6 +58,7 @@ export async function readEGSCModel(blob, options = {}) {
     minDuration: meta.min_duration ?? 0.02,
     opacityFloor: meta.opacity_floor ?? 1e-4,
     useVelocity: meta.use_velocity ?? true,
+    onProgress: (p) => options.onProgress?.(0.8 + 0.15 * p),
   });
   model.sourceCount = splats.count;
   options.onProgress?.(1);

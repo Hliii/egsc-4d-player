@@ -142,20 +142,29 @@ async function decodeSubset(egsc, subset, decodeAstc, timings, opts = {}) {
 
   // ---- 3. entropy attributes: workers (zstd+merge+DPCM+dequant), in
   // parallel with the texture job above ----
-  const t = Date.now();
+  // Progress: each completed substream (attr or texture) advances the
+  // 0.05..0.8 decode window proportionally; the assembly chunks below
+  // cover 0.8..0.95.
+  const progress = opts.onProgress ?? (() => {});
   const entries = [...byAttr.entries()];
+  const totalJobs = entries.length + (texStream ? 1 : 0);
+  let doneJobs = 0;
+  const tick = () => progress(0.05 + 0.75 * (++doneJobs / totalJobs));
+  const t = Date.now();
   let attrResults;
   if (useWorkers) {
     attrResults = await Promise.all([
-      texJob,
-      ...entries.map(([name, list]) => dispatchAttr(name, list, recon[name], N)),
+      texJob.then(tick),
+      ...entries.map(([name, list]) =>
+        dispatchAttr(name, list, recon[name], N).then((r) => (tick(), r))),
     ]);
+    attrResults = [undefined, ...attrResults.slice(1)];
   } else {
     const { attrDecodeInline } = await import("./attr-inline.js");
     await texJob;
     attrResults = [
       undefined,
-      ...entries.map(([name, list]) => attrDecodeInline(name, list, recon[name], N)),
+      ...entries.map(([name, list]) => { const r = attrDecodeInline(name, list, recon[name], N); tick(); return r; }),
     ];
   }
   timings.attrs = (timings.attrs ?? 0) + (Date.now() - t);
@@ -252,7 +261,13 @@ export async function splatToPlayerModel(splats, meta = {}) {
         sh0: splats.features_dc, shN: splats.features_rest,
         coefficients, minDuration });
     }
-    const results = await Promise.all(chunks.map(dispatchModelChunk));
+    const onChunk = meta.onProgress;
+    let doneChunks = 0;
+    const results = await Promise.all(chunks.map((c) =>
+      dispatchModelChunk(c).then((r) => {
+        if (onChunk) onChunk((++doneChunks / chunks.length));
+        return r;
+      })));
     for (const r of results) {
       model.positionTime.set(r.positionTime, r.start * 4);
       model.velocityDuration.set(r.velocityDuration, r.start * 4);

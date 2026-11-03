@@ -1,11 +1,15 @@
 import { readModel } from "./model.js";
 import { createModuleWorker } from "./worker.js";
 
+const bytesOf = async (blob) =>
+  blob instanceof Uint8Array ? blob : new Uint8Array(await blob.arrayBuffer());
+
 /** Decode away from the UI. Older browsers use the same decoder on the main thread. */
 export async function readModelInWorker(blob, options = {}) {
   const { signal, onProgress = () => {}, ...decodeOptions } = options;
   signal?.throwIfAborted();
-  const signature = new DataView(await blob.slice(0, 4).arrayBuffer());
+  const bytes = await bytesOf(blob);
+  const signature = new DataView(bytes.buffer, bytes.byteOffset, 4);
   signal?.throwIfAborted();
   const tsog = signature.byteLength === 4 && signature.getUint32(0, true) === 0x04034b50;
   let worker;
@@ -36,7 +40,13 @@ export async function readModelInWorker(blob, options = {}) {
           clearTimeout(startup);
           if (tsog && !data.tsog) return finish(resolve, null);
           started = true;
-          worker.postMessage({ type: "decode", blob, options: decodeOptions });
+          // Transfer the bytes buffer (zero-copy) instead of posting the
+          // Blob: structured-cloning a 10 MB Blob stalls the worker startup
+          // (the "dead window" between download-100% and the first decode
+          // progress event). A view's backing ArrayBuffer transfers cheap;
+          // plain Blobs still post as-is (main-thread readModel fallback).
+          const transfer = blob instanceof Uint8Array ? [bytes.buffer] : [];
+          worker.postMessage({ type: "decode", blob: bytes, options: decodeOptions }, transfer);
         } else if (data.type === "progress") onProgress(data.progress);
         else if (data.type === "decoded") finish(resolve, data.model);
         else if (data.type === "error") {

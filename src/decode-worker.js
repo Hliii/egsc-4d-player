@@ -3,6 +3,8 @@ import { readModel } from "./model.js";
 self.onmessage = async ({ data }) => {
   if (data.type !== "decode") return;
   try {
+    // data.blob arrives as a TRANSFERRED Uint8Array (zero-copy) or a Blob;
+    // model.js handles both (wraps slices for the TSOG/PLY paths itself).
     const model = await readModel(data.blob, {
       ...data.options,
       onProgress: (progress) => self.postMessage({ type: "progress", progress }),

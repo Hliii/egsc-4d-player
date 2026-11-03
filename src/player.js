@@ -321,6 +321,12 @@ export class FTGSPlayer extends EventTarget {
           buffer = await response.arrayBuffer();
         }
         blob = new Blob([buffer]);
+        // Hand the raw bytes to the decode worker as a TRANSFERABLE: the
+        // structured clone of a Blob (~10 MB) made the worker spend a
+        // noticeable "dead window" after download-100% before the first
+        // decode progress event. Transferring the ArrayBuffer is zero-copy.
+        // The loader path also accepts a plain Uint8Array blob.
+        blob = new Uint8Array(buffer);
         if (name === undefined) {
           name = url.pathname.split("/").pop() || "Remote model";
           try {
@@ -330,7 +336,7 @@ export class FTGSPlayer extends EventTarget {
           }
         }
       }
-      if (!(blob instanceof Blob))
+      if (!(blob instanceof Blob) && !(blob instanceof Uint8Array))
         throw new TypeError("load() needs a File, Blob, or HTTP(S) URL.");
       if (name !== undefined && typeof name !== "string")
         throw new TypeError("name must be a string.");
