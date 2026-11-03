@@ -295,7 +295,29 @@ export class FTGSPlayer extends EventTarget {
           throw new Error(`Model request failed: HTTP ${response.status}.`);
         // arrayBuffer + in-memory Blob: Chrome's disk-backed blob storage can
         // fail (net::ERR_FAILED) for large responses under constrained caches.
-        const buffer = await response.arrayBuffer();
+        // Stream with progress: Content-Length (when present) drives the
+        // download progress events before decode starts.
+        const total = +response.headers.get("Content-Length") || 0;
+        let buffer;
+        if (response.body && total > 0) {
+          const reader = response.body.getReader();
+          const chunks = [];
+          let loaded = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            loaded += value.length;
+            if (generation !== this.#generation) throw aborted();
+            this.#progress = Math.min(0.999, (loaded / total) * 0.5);
+            this.#emit("progress");
+          }
+          buffer = new ArrayBuffer(loaded);
+          let off = 0;
+          for (const c of chunks) { new Uint8Array(buffer, off, c.length).set(c); off += c.length; }
+        } else {
+          buffer = await response.arrayBuffer();
+        }
         blob = new Blob([buffer]);
         if (name === undefined) {
           name = url.pathname.split("/").pop() || "Remote model";
@@ -317,7 +339,8 @@ export class FTGSPlayer extends EventTarget {
         signal: controller.signal,
         onProgress: (progress) => {
           if (generation !== this.#generation) return;
-          this.#progress = progress;
+          // decode occupies the second half of the progress bar (0.5..1)
+          this.#progress = 0.5 + progress * 0.5;
           this.#emit("progress");
         },
       });
