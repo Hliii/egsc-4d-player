@@ -52,7 +52,19 @@
       const status = document.getElementById("status");
       const timing = document.getElementById("timing");
       const query = new URLSearchParams(location.search);
-      const src = query.get("src") ?? "examples/assets/scene-v9.egsc";
+      // default scene: page-relative first (GitHub Pages /examples/…), then
+      // root-relative (EdgeOne serves this html at /) — probe with HEAD
+      const resolveSrc = async () => {
+        for (const c of ["./assets/scene-v9.egsc", "examples/assets/scene-v9.egsc"]) {
+          try {
+            if ((await fetch(new URL(c, location.href), { method: "HEAD" })).ok)
+              return new URL(c, location.href).href;
+          } catch { /* probe */ }
+        }
+        return new URL("./assets/scene-v9.egsc", location.href).href;
+      };
+      const src = query.get("src") ?? (await resolveSrc());
+      const sceneUrl = src;
       const t0 = performance.now();
       let decodeMs = null;
 
@@ -83,12 +95,12 @@
               const names = (await caches.keys()).filter((n) => n.startsWith("egsc-4d-"));
               for (const name of names) {
                 const cache = await caches.open(name);
-                if (await cache.match(new URL("examples/assets/scene-v9.egsc", location.href).href)) {
+                if (await cache.match(sceneUrl)) {
                   offlineReady();
                   return;
                 }
               }
-              await fetch(new URL("examples/assets/scene-v9.egsc", location.href).href);
+              await fetch(sceneUrl);
               offlineReady();
             } catch { /* best effort */ }
           };
