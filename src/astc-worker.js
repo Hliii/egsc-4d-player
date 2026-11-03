@@ -5,7 +5,7 @@
 // The handler must be attached synchronously: in a module worker, messages
 // posted while a top-level await is pending fire before the script finishes,
 // so any await-before-onmessage drops them.
-import { decode_astc, initialize } from "./vendor/texture2ddecoder.mjs";
+import { decode_astc, initialize } from "./vendor/texture2ddecoder.js";
 
 let nodePort = null;
 let postMsg = (m, t) => globalThis.postMessage(m, t);

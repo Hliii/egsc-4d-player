@@ -48,12 +48,6 @@
     </div>
     <script type="module">
       import { FTGSPlayer } from "../src/index.js";
-      // modulepreload: warm the dynamic-import graph (model.js lazily pulls
-      // egsc-loader.js/egsc-model.js/egsc-astc.js at scene-load time). Without
-      // this, a stale service worker can abort the in-flight import.
-      for (const m of ["../src/egsc-loader.js", "../src/egsc-model.js", "../src/egsc-astc.js", "../src/ftgs.js"])
-        { const l = document.createElement("link"); l.rel = "modulepreload"; l.href = m; document.head.append(l); }
-
       const status = document.getElementById("status");
       const timing = document.getElementById("timing");
       const query = new URLSearchParams(location.search);
@@ -117,26 +111,6 @@
         }
       })();
 
-      // Warm the FULL decode-time module graph from the page context.
-      // EdgeOne preview hosts authenticate via a cookie that is NOT attached
-      // to service-worker/worker/browser-internal fetches (SW precache
-      // ERR_FAILED, manifest 401, decode-worker import 401 -> "Failed to
-      // fetch dynamically imported module"). Page fetches carry the cookie,
-      // so pulling every lazily-imported module + the wasm into the HTTP
-      // cache here makes all later worker/SW requests cache hits.
-      const warmDecodeGraph = async () => {
-        const files = [
-          "egsc-loader.js", "egsc-model.js", "egsc-astc.js", "egsc.js", "ftgs.js",
-          "sort.js", "sort-worker.js", "attr-worker.js", "attr-inline.js",
-          "model-worker.js", "tex-worker.js", "tex-inline.js", "astc-worker.js",
-          "vendor/fzstd.mjs", "vendor/texture2ddecoder.mjs",
-          "vendor/wasm/texture2ddecoder.js", "vendor/wasm/texture2ddecoder.wasm",
-        ];
-        await Promise.all(files.map((f) =>
-          fetch(new URL("../src/" + f, location.href)).catch(() => {})));
-      };
-      await warmDecodeGraph();
-
       const player = new FTGSPlayer(document.getElementById("scene"), {
         maxPoints: query.get("points") === "all" ? Infinity : 1000000,
         frames: query.get("frames") ? Number(query.get("frames")) : undefined,
@@ -166,18 +140,7 @@
         const v = query.get("view");
         if (v) { try { initialView = JSON.parse(v); } catch { /* bad param: ignore */ } }
       }
-      // stale-SW resilience: a failed dynamic import (aborted by an old
-      // service worker) succeeds on an immediate retry once modules warm up.
-      for (let attempt = 1; ; attempt++) {
-        try {
-          await player.load(new URL(src, location.href).href, { autoplay: true, view: initialView });
-          break;
-        } catch (e) {
-          if (attempt >= 3 || !(String(e.message ?? e).includes("dynamically imported module"))) throw e;
-          status.textContent = `retrying module load (${attempt})…`;
-          await new Promise((r) => setTimeout(r, 500));
-        }
-      }
+      await player.load(new URL(src, location.href).href, { autoplay: true, view: initialView });
 
       // FPS meter: counts actual splat renders (SplatRenderer.draw calls),
       // not display refresh — a static scene shows the true render idle state.

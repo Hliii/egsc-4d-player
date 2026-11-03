@@ -118,7 +118,7 @@ async function decodeSubset(egsc, subset, decodeAstc, timings, opts = {}) {
     if (!texStream) return;
     let t = Date.now();
     const raw = texStream.meta.entropy
-      ? (await import("./vendor/fzstd.mjs")).decompress(texStream.data)
+      ? (await import("./vendor/fzstd.js")).decompress(texStream.data)
       : texStream.data;
     const astc = parseAstcHeader(raw);
     if (!decodeAstc) throw new Error("This stream needs an ASTC decoder.");

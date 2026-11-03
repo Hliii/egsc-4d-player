@@ -3,7 +3,7 @@
 //    (mobile GPUs decode natively; desktop usually lacks the extension).
 // 2. Fallback: WASM decoder with horizontal strip parallelism across workers.
 
-import { decode_astc as wasmDecode } from "./vendor/texture2ddecoder.mjs";
+import { decode_astc as wasmDecode } from "./vendor/texture2ddecoder.js";
 import { createModuleWorker } from "./worker.js";
 
 const ASTC_FORMATS = {

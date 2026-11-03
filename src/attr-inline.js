@@ -1,6 +1,6 @@
 // Inline (no-worker) attribute decode: identical math to attr-worker.js,
 // used by Node smoke tests where Worker is unavailable.
-import { decompress as zstdDecompress } from "./vendor/fzstd.mjs";
+import { decompress as zstdDecompress } from "./vendor/fzstd.js";
 
 const F = Math.fround;
 

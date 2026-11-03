@@ -1,7 +1,7 @@
 // Attribute worker: zstd + lsb/msb merge + DPCM + dequant for one attribute.
 // Receives the entropy substreams and reconstruction info; returns the
 // dequantized Float32Array (and the float64 opacity trace when applicable).
-import { decompress as zstdDecompress } from "./vendor/fzstd.mjs";
+import { decompress as zstdDecompress } from "./vendor/fzstd.js";
 
 const F = Math.fround;
 const rec_quant_patches = (recon) => recon.quant.patches;
