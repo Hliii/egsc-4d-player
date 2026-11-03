@@ -256,10 +256,40 @@ export class OrbitCamera {
   orbit(dx, dy) {
     // Sensitivity: 1/4 of the upstream 0.006 after user feedback.
     const k = 0.0015;
-    this.#rotateAroundLocal(1, -dx * k);
-    // pole guard: keep |back · worldUp| within the old pitch clamp (±~86°)
+    // Single rigid rotation for the whole drag step: one axis, one angle.
+    // The old two-step composite (local-up for dx, then local-right for dy)
+    // is not a rigid arc — its second-order error accumulated a
+    // direction-dependent roll drift on circular drags (CCW raised the
+    // readout monotonically, CW lowered it). A rotation around the axis
+    // perpendicular to the drag plane moves the camera exactly along a
+    // great circle and preserves roll by construction.
+    if (dx === 0 && dy === 0) return;
+    const mag = Math.hypot(dx, dy) * k;
+    // axis: in-plane drag direction rotated 90° in the camera's local
+    // screen plane: right*dy - up*(-dx). One rotation around one axis
+    // moves the camera exactly along a great circle.
+    const right = [this.basis[0], this.basis[1], this.basis[2]];
+    const up = [this.basis[3], this.basis[4], this.basis[5]];
+    const axis = unit([
+      right[0] * dy - up[0] * (-dx),
+      right[1] * dy - up[1] * (-dx),
+      right[2] * dy - up[2] * (-dx),
+    ]);
     const before = [...this.basis];
-    this.#rotateAroundLocal(0, -dy * k);
+    const rot = (v) => rotAxis(v, axis, mag);
+    this.basis = [...rot(right), ...rot(up), ...rot([this.basis[6], this.basis[7], this.basis[8]])];
+    // Deroll: great-circle arcs around a rolled camera carry a
+    // view-axis roll component relative to upRef (arc drags read as
+    // monotonic roll drift: CCW raises it, CW lowers it). Rotate the
+    // basis around the (new) view axis back onto the upRef plane so
+    // orbiting never changes the picture's tilt — the great circle is
+    // re-projected into the upRef-normal cone (a "yaw/pitch only" tour).
+    {
+      const b = [this.basis[6], this.basis[7], this.basis[8]];
+      const a = this.#rollAngle;
+      if (Math.abs(a) > 1e-9) this.#rotateAroundLocal(2, -a);
+    }
+    // pole guard: keep |back · worldUp| within the old pitch clamp (±~86°)
     const b = [this.basis[6], this.basis[7], this.basis[8]];
     const wu = this.#worldUp();
     if (Math.abs(dot(b, wu)) > 0.9975) this.basis = before;
@@ -356,12 +386,26 @@ export class OrbitCamera {
     const panC = Math.min(L.panMax, Math.max(L.panMin, pan));
     const tiltC = Math.min(L.tiltMax, Math.max(L.tiltMin, tilt));
     if (panC !== pan || tiltC !== tilt) {
-      // rebuild back from the clamped angles: pan around u0, then -tilt
-      // around r0 (sign: +tilt must move back toward +u0)
-      let b = rotAxis(L.back0, L.u0, panC);
-      b = unit(rotAxis(b, L.r0, -tiltC));
-      const upHint = [this.basis[3], this.basis[4], this.basis[5]];
-      this.#setBasis(b, upHint);
+      // Clamp the VIEW DIRECTION as a rigid rotation: rotate the current
+      // back by only the excess angle around the reference frame axes.
+      // Rotating back (and leaving the basis rebuild to #setBasis with the
+      // rotated up as hint) keeps the camera's roll mathematically intact —
+      // rebuilding back from absolute clamped angles + projecting the old
+      // up accumulated a direction-dependent roll error on every wall hit
+      // (arc drags drifted the readout monotonically).
+      let b = [this.basis[6], this.basis[7], this.basis[8]];
+      let u = [this.basis[3], this.basis[4], this.basis[5]];
+      if (panC !== pan) {
+        const d = rotAxis(b, L.u0, panC - pan);
+        u = rotAxis(u, L.u0, panC - pan);
+        b = d;
+      }
+      if (tiltC !== tilt) {
+        const d = rotAxis(b, L.r0, -(tiltC - tilt));
+        u = rotAxis(u, L.r0, -(tiltC - tilt));
+        b = d;
+      }
+      this.#setBasis(b, u);
     }
     // 2. target leash: keep the look-at point near the anchor (every
     // boundary view targets it). A runaway target — huge pan drags —
