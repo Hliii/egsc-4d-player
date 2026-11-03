@@ -10,6 +10,13 @@ const unit = (v) => {
 };
 const movementKeys = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE"]);
 const rollKeys = new Set(["Comma", "Period"]);
+/** Rodrigues rotation of v around a unit axis by ang radians. */
+const rotAxis = (v, axis, ang) => {
+  const c = Math.cos(ang), s = Math.sin(ang);
+  const k = dot(axis, v);
+  const cr = cross(axis, v);
+  return v.map((x, i) => x * c + cr[i] * s + axis[i] * k * (1 - c));
+};
 
 export function lookAt(eye, target, up) {
   const back = unit(eye.map((v, i) => v - target[i]));
@@ -241,6 +248,7 @@ export class OrbitCamera {
     const b = [this.basis[6], this.basis[7], this.basis[8]];
     const wu = this.#worldUp();
     if (Math.abs(dot(b, wu)) > 0.9975) this.basis = before;
+    this.#applyLimits();
   }
   fit(bounds = this.bounds) {
     this.stopMoving();
@@ -278,19 +286,92 @@ export class OrbitCamera {
     this.upRef = [...upVec];
     this.roll = 0;
     this.fov = (fov * Math.PI) / 180;
+    this.#applyLimits(); // ?view= imports may exceed active limits: pull back
     this.onChange?.();
+  }
+  /** Impose a viewing-range limit derived from user-tuned boundary views.
+   *  reference: the center view; left/right/top/bottom bound the orbit
+   *  direction (pan/tilt in the reference camera's own frame, so a rolled
+   *  reference works); near/far bound the eye distance to the reference
+   *  target (the anchor the user orbited around). All views are plain
+   *  {eye, target, up, fov} camera views. Call after restore(). */
+  setViewLimits({ reference, left, right, top, bottom, near, far }) {
+    const center = validateCameraView(reference);
+    const back0 = unit(center.eye.map((v, i) => v - center.target[i]));
+    const up0 = Array.isArray(center.up) ? unit(center.up) : this.#worldUp();
+    const r0 = unit(cross(up0, back0));
+    const u0 = cross(back0, r0);
+    const angleOf = (view) => {
+      const v = validateCameraView(view);
+      const b = unit(v.eye.map((x, i) => x - v.target[i]));
+      return {
+        pan: Math.atan2(dot(b, r0), dot(b, back0)),
+        tilt: Math.atan2(dot(b, u0), dot(b, back0)),
+      };
+    };
+    const distFromAnchor = (view) => {
+      const v = validateCameraView(view);
+      return Math.hypot(...v.eye.map((x, i) => x - center.target[i]));
+    };
+    this.viewLimits = {
+      back0, r0, u0, anchor: [...center.target],
+      panMin: angleOf(left).pan, panMax: angleOf(right).pan,
+      tiltMin: angleOf(bottom).tilt, tiltMax: angleOf(top).tilt,
+      dMin: distFromAnchor(near), dMax: distFromAnchor(far),
+    };
+    this.#applyLimits();
+    this.onChange?.();
+  }
+  /** Clamp the current view into the active limits: direction first (rotate
+   *  the basis back onto the boundary, roll preserved via the current up),
+   *  then distance (slide eye+target onto the allowed shell, view angle and
+   *  eye-target distance unchanged). */
+  #applyLimits() {
+    const L = this.viewLimits;
+    if (!L) return;
+    const back = [this.basis[6], this.basis[7], this.basis[8]];
+    const pan = Math.atan2(dot(back, L.r0), dot(back, L.back0));
+    const tilt = Math.atan2(dot(back, L.u0), dot(back, L.back0));
+    const panC = Math.min(L.panMax, Math.max(L.panMin, pan));
+    const tiltC = Math.min(L.tiltMax, Math.max(L.tiltMin, tilt));
+    if (panC !== pan || tiltC !== tilt) {
+      // rebuild back from the clamped angles: pan around u0, then -tilt
+      // around r0 (sign: +tilt must move back toward +u0)
+      let b = rotAxis(L.back0, L.u0, panC);
+      b = unit(rotAxis(b, L.r0, -tiltC));
+      const upHint = [this.basis[3], this.basis[4], this.basis[5]];
+      this.#setBasis(b, upHint);
+    }
+    // distance to the anchor: slide eye+target together onto the shell
+    const [bx, by, bz] = [this.basis[6], this.basis[7], this.basis[8]];
+    const eye = [
+      this.target[0] + bx * this.distance,
+      this.target[1] + by * this.distance,
+      this.target[2] + bz * this.distance,
+    ];
+    const d = Math.hypot(...eye.map((v, i) => v - L.anchor[i]));
+    const dC = Math.min(L.dMax, Math.max(L.dMin, d));
+    if (dC !== d && d > 1e-9) {
+      const shift = eye.map((v, i) => {
+        const dir = (v - L.anchor[i]) / d;
+        return L.anchor[i] + dir * dC - v;
+      });
+      for (let i = 0; i < 3; i++) this.target[i] += shift[i];
+    }
   }
   zoom(factor) {
     this.distance = Math.max(
       this.bounds.radius * 0.02,
       Math.min(this.bounds.radius * 100, this.distance * factor),
     );
+    this.#applyLimits();
   }
   pan(dx, dy) {
     const { view } = this.snapshot(),
       scale = this.distance / Math.max(1, this.canvas.clientHeight);
     for (let i = 0; i < 3; i++)
       this.target[i] += (-dx * view[4 * i] + dy * view[4 * i + 1]) * scale;
+    this.#applyLimits();
   }
   stopMoving() {
     this.keys?.clear();
@@ -367,6 +448,7 @@ export class OrbitCamera {
     // Translate the eye and its orbit target together, preserving the view angle.
     for (let axis = 0; axis < 3; axis++)
       this.target[axis] += direction[axis] * step;
+    this.#applyLimits();
     this.onChange?.();
   }
   snapshot() {

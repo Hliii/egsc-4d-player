@@ -116,6 +116,7 @@
         frames: query.get("frames") ? Number(query.get("frames")) : undefined,
         fps: query.get("fps") ? Number(query.get("fps")) : undefined,
       });
+      window.__player = player; // console/debug handle
       player.addEventListener("progress", (e) => {
         const p = e.detail?.progress ?? 0;
         status.textContent = `decoding… ${(p * 100).toFixed(0)}%`;
@@ -136,11 +137,24 @@
         up: [0.3135, 0.2004, -0.9282],
         fov: 45,
       };
+      // Viewing-range limits (user-tuned boundary views): orbit direction
+      // bounded by left/right/top/bottom, distance by near/far. The
+      // reference (center) view anchors both the angle frame and the shell.
+      const viewLimits = {
+        reference: initialView,
+        left:   { eye: [1.1428, -0.3466, 0.2924], target: [6.1196, -0.5578, 2.0004], up: [0.3256, 0.2017, -0.9238], fov: 45 },
+        right:  { eye: [1.1591,  0.3253, 0.4692], target: [6.1196, -0.5578, 2.0004], up: [0.3212, 0.199,  -0.9259], fov: 45 },
+        top:    { eye: [1.2404,  0.0078, 0.1018], target: [6.1196, -0.5578, 2.0004], up: [0.3751, 0.1919, -0.9069], fov: 45 },
+        bottom: { eye: [1.0234, -0.1492, 0.7386], target: [6.1196, -0.5578, 2.0004], up: [0.2507, 0.2059, -0.9459], fov: 45 },
+        near:   { eye: [1.5063, -0.0124, 0.5139], target: [6.4909, -0.4888, 2.1443], up: [0.3218, 0.1997, -0.9255], fov: 45 },
+        far:    { eye: [1.0431,  0.0087, 0.3574], target: [6.0279, -0.4522, 1.9913], up: [0.3218, 0.1996, -0.9255], fov: 45 },
+      };
       {
         const v = query.get("view");
         if (v) { try { initialView = JSON.parse(v); } catch { /* bad param: ignore */ } }
       }
       await player.load(new URL(src, location.href).href, { autoplay: true, view: initialView });
+      player.camera?.setViewLimits?.(viewLimits);
 
       // FPS meter: counts actual splat renders (SplatRenderer.draw calls),
       // not display refresh — a static scene shows the true render idle state.
