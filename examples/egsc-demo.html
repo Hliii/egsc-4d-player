@@ -48,6 +48,11 @@
     </div>
     <script type="module">
       import { FTGSPlayer } from "../src/index.js";
+      // modulepreload: warm the dynamic-import graph (model.js lazily pulls
+      // egsc-loader.js/egsc-model.js/egsc-astc.js at scene-load time). Without
+      // this, a stale service worker can abort the in-flight import.
+      for (const m of ["../src/egsc-loader.js", "../src/egsc-model.js", "../src/egsc-astc.js", "../src/ftgs.js"])
+        { const l = document.createElement("link"); l.rel = "modulepreload"; l.href = m; document.head.append(l); }
 
       const status = document.getElementById("status");
       const timing = document.getElementById("timing");
@@ -141,7 +146,18 @@
         const v = query.get("view");
         if (v) { try { initialView = JSON.parse(v); } catch { /* bad param: ignore */ } }
       }
-      await player.load(new URL(src, location.href).href, { autoplay: true, view: initialView });
+      // stale-SW resilience: a failed dynamic import (aborted by an old
+      // service worker) succeeds on an immediate retry once modules warm up.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await player.load(new URL(src, location.href).href, { autoplay: true, view: initialView });
+          break;
+        } catch (e) {
+          if (attempt >= 3 || !(String(e.message ?? e).includes("dynamically imported module"))) throw e;
+          status.textContent = `retrying module load (${attempt})…`;
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
 
       // FPS meter: counts actual splat renders (SplatRenderer.draw calls),
       // not display refresh — a static scene shows the true render idle state.
