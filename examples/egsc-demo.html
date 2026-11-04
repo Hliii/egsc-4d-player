@@ -107,6 +107,10 @@
       const sceneUrl = loadUrl;
       const t0 = performance.now();
       let decodeMs = null;
+      // every player.load() resets the load timer: the readout must measure
+      // THIS load, not wall-clock since page open (the reload button used
+      // to accumulate all previous loads + viewing time)
+      let loadStart = t0;
 
       // PWA: register the service worker early (offline cache). Must be
       // http(s) (or localhost); file:// silently skips. Runs in parallel with
@@ -159,6 +163,7 @@
         playbackRate: query.get("rate") ? Number(query.get("rate")) : 0.75, // default 0.75×
       });
       window.__player = player; // console/debug handle
+      player.addEventListener("loadstart", () => { loadStart = performance.now(); });
       // roll readout: live from the camera basis (never stale). The old
       // timeupdate-only refresh froze the readout when playback was paused
       // and it "jumped" on the next event.
@@ -206,7 +211,7 @@
         }
       });
       player.addEventListener("loaded", (e) => {
-        decodeMs = performance.now() - t0;
+        decodeMs = performance.now() - loadStart;
         status.textContent = `ready — ${(e.detail?.pointCount ?? 0).toLocaleString()} Gaussians`;
         timing.textContent = `load+decode: ${(decodeMs / 1000).toFixed(2)} s`;
         document.getElementById("bigload")?.setAttribute("hidden", "");
