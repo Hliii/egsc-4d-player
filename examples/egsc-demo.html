@@ -111,6 +111,9 @@
       // THIS load, not wall-clock since page open (the reload button used
       // to accumulate all previous loads + viewing time)
       let loadStart = t0;
+      // phase timers: download (loadstart -> first decode event) and decode
+      // (first decode event -> loaded), shown alongside the total
+      let dlStart = 0, dcStart = 0, dlMs = 0, dcMs = 0;
 
       // PWA: register the service worker early (offline cache). Must be
       // http(s) (or localhost); file:// silently skips. Runs in parallel with
@@ -163,7 +166,11 @@
         playbackRate: query.get("rate") ? Number(query.get("rate")) : 0.75, // default 0.75×
       });
       window.__player = player; // console/debug handle
-      player.addEventListener("loadstart", () => { loadStart = performance.now(); });
+      player.addEventListener("loadstart", () => {
+        loadStart = dlStart = dcStart = 0;
+        dlMs = dcMs = 0;
+        loadStart = performance.now();
+      });
       // roll readout: live from the camera basis (never stale). The old
       // timeupdate-only refresh froze the readout when playback was paused
       // and it "jumped" on the next event.
@@ -185,6 +192,7 @@
         const p = e.detail?.progress ?? 0;
         const phase = e.detail?.phase;
         if (phase === "download") {
+          if (!dlStart) dlStart = performance.now();
           status.textContent = `downloading… ${(p * 100).toFixed(0)}%`;
           const f = document.getElementById("fill-dl");
           if (f) {
@@ -193,6 +201,10 @@
             document.getElementById("ph-dl").classList.add("active");
           }
         } else if (phase === "decode") {
+          if (!dcStart) {
+            dcStart = performance.now();
+            dlMs = dcStart - (dlStart || dcStart);
+          }
           status.textContent = `decoding… ${(p * 100).toFixed(0)}%`;
           const f = document.getElementById("fill-dc");
           if (f) {
@@ -212,8 +224,9 @@
       });
       player.addEventListener("loaded", (e) => {
         decodeMs = performance.now() - loadStart;
+        dcMs = dcStart ? performance.now() - dcStart : 0;
         status.textContent = `ready — ${(e.detail?.pointCount ?? 0).toLocaleString()} Gaussians`;
-        timing.textContent = `load+decode: ${(decodeMs / 1000).toFixed(2)} s`;
+        timing.textContent = `load+decode: ${(decodeMs / 1000).toFixed(2)} s (dl ${(dlMs / 1000).toFixed(2)} + dc ${(dcMs / 1000).toFixed(2)})`;
         document.getElementById("bigload")?.setAttribute("hidden", "");
         player.play();
       });
