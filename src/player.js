@@ -174,6 +174,12 @@ export class FTGSPlayer extends EventTarget {
     this.#assertAlive();
     return this.#camera;
   }
+  /** Request a re-sort + redraw on the next frame (e.g. after mutating
+   *  camera.viewNudge for gyroscope fine-tuning). */
+  invalidateView() {
+    this.#assertAlive();
+    this.#dirty = true;
+  }
   get playing() {
     return this.#playing;
   }

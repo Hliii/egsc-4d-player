@@ -568,7 +568,22 @@ export class OrbitCamera {
     this.onChange?.();
   }
   snapshot() {
-    const [rx, ry, rz, ux, uy, uz, bx, by, bz] = this.basis;
+    let [rx, ry, rz, ux, uy, uz, bx, by, bz] = this.basis;
+    // External view nudge (gyroscope immersive mode): a small rotation
+    // applied on top of the orbit state WITHOUT modifying it — leaving
+    // immersive mode or any drag re-derives from the untouched basis, and
+    // the view-range limits still govern the underlying orbit pose.
+    const n = this.viewNudge;
+    if (n) {
+      const rot = (v) => [
+        n[0] * v[0] + n[1] * v[1] + n[2] * v[2],
+        n[3] * v[0] + n[4] * v[1] + n[5] * v[2],
+        n[6] * v[0] + n[7] * v[1] + n[8] * v[2],
+      ];
+      [rx, ry, rz] = rot([rx, ry, rz]);
+      [ux, uy, uz] = rot([ux, uy, uz]);
+      [bx, by, bz] = rot([bx, by, bz]);
+    }
     const eye = [
       this.target[0] + bx * this.distance,
       this.target[1] + by * this.distance,

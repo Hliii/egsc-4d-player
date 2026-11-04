@@ -60,6 +60,7 @@
       <button id="play">Play / pause</button>
       <button id="viewexport" title="Copy the current camera view (JSON + shareable URL)" style="border-color:#2f6f5f;color:#8fd">⤓ view</button>
       <button id="redownload" title="Re-download and re-decode the scene from the network (bypasses the offline cache for this load)" style="border-color:#6f5f2f;color:#fd8">⟳ 重新加载</button>
+      <button id="immersive" title="Fullscreen immersive mode with gyroscope fine-tuning (mobile)" style="border-color:#2f5f6f;color:#8df">⛶ 沉浸</button>
       <button id="rollL" class="hold" title="Roll counter-clockwise (hold to spin, tap for a step)">↺</button>
       <span id="rollinfo" title="Click to reset roll">roll 0°</span>
       <button id="rollR" class="hold" title="Roll clockwise (hold to spin, tap for a step)">↻</button>
@@ -348,6 +349,78 @@
       holdButton(document.getElementById("rollL"), -30 * DEG);
       holdButton(document.getElementById("rollR"), 30 * DEG);
       rollinfo.onclick = () => { player.camera.resetRoll(); showRoll(); };
+
+      // ⛶ 沉浸: fullscreen + gyroscope fine-tuning. The gyro delta is
+      // applied as a view NUDGE on top of the orbit camera (never mutating
+      // the orbit state), so the tuned view, roll and view limits all
+      // survive; exiting immersive mode restores exactly the base view.
+      {
+        const btn = document.getElementById("immersive");
+        let active = false;
+        let base = null;      // first orientation sample (relative mode)
+        let nudge = null;     // rotation increments [r00..r22] for camera.viewNudge
+        const MAX_DEV = 12 * Math.PI / 180; // clamp: small-view fine-tuning only
+        const DEG = Math.PI / 180;
+        const rotXY = (rx, ry) => { // small-angle rotation matrix around X then Y
+          const cx = Math.cos(rx), sx = Math.sin(rx), cy = Math.cos(ry), sy = Math.sin(ry);
+          return [cy, 0, sy, sx * sy, cx, -sx * cy, -sy * cx, sx, cx * cy];
+        };
+        const onOrient = (e) => {
+          if (!active || e.beta === null || e.gamma === null) return;
+          if (!base) { base = { beta: e.beta, gamma: e.gamma }; return; }
+          // relative deltas in radians (beta=pitch, gamma=roll of the device)
+          let dp = (e.beta - base.beta) * DEG;
+          let dr = (e.gamma - base.gamma) * DEG;
+          // dead zone + clamp
+          const dz = 0.5 * DEG;
+          dp = Math.max(-MAX_DEV, Math.min(MAX_DEV, Math.abs(dp) < dz ? 0 : dp));
+          dr = Math.max(-MAX_DEV, Math.min(MAX_DEV, Math.abs(dr) < dz ? 0 : dr));
+          const cam = player.camera;
+          if (cam) {
+            cam.viewNudge = rotXY(dp, dr);
+            nudge = cam.viewNudge;
+            player.invalidateView();
+          }
+        };
+        const exit = () => {
+          active = false;
+          base = null;
+          if (player.camera) player.camera.viewNudge = null;
+          nudge = null;
+          window.removeEventListener("deviceorientation", onOrient);
+          btn.textContent = "⛶ 沉浸";
+        };
+        btn.onclick = async () => {
+          if (active) { exit(); if (document.fullscreenElement) await document.exitFullscreen().catch(() => {}); return; }
+          // enter: fullscreen + orientation lock (landscape first)
+          try {
+            await document.documentElement.requestFullscreen();
+            await screen.orientation?.lock?.("landscape").catch(() => {});
+          } catch { /* desktop / denied: still allow gyro-less fullscreen */ }
+          // gyroscope permission (iOS 13+) or plain listener
+          try {
+            if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+              const perm = await DeviceOrientationEvent.requestPermission();
+              if (perm !== "granted") throw new Error("gyro denied");
+            }
+            window.addEventListener("deviceorientation", onOrient);
+            active = true;
+            btn.textContent = "⛶ 退出";
+          } catch {
+            // no gyro (desktop) or denied: fullscreen-only immersive
+            active = true;
+            btn.textContent = "⛶ 退出";
+          }
+          document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && active) exit(); }, { once: true });
+        };
+        // re-baseline the gyro when the user orbits inside immersive mode:
+        // their drag changes the base view, so the nudge must restart from 0
+        const cam0 = player.camera;
+        if (cam0) {
+          const origOrbit = cam0.orbit.bind(cam0);
+          cam0.orbit = (dx, dy) => { if (active) base = null; return origOrbit(dx, dy); };
+        }
+      }
 
       // view export/import: click ⤓ view to copy the current camera as JSON
       // (+ a shareable ?view= link); open such a link to restore the view.
