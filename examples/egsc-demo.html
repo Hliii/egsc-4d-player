@@ -59,12 +59,13 @@
     <div id="controls">
       <button id="play">Play / pause</button>
       <button id="viewexport" title="Copy the current camera view (JSON + shareable URL)" style="border-color:#2f6f5f;color:#8fd">⤓ view</button>
+      <button id="redownload" title="Re-download and re-decode the scene from the network (bypasses the offline cache for this load)" style="border-color:#6f5f2f;color:#fd8">⟳ 重新加载</button>
       <button id="rollL" class="hold" title="Roll counter-clockwise (hold to spin, tap for a step)">↺</button>
       <span id="rollinfo" title="Click to reset roll">roll 0°</span>
       <button id="rollR" class="hold" title="Roll clockwise (hold to spin, tap for a step)">↻</button>
       <select id="rate" aria-label="Playback speed" title="Playback speed">
         <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
-        <option value="0.75">0.75×</option><option value="1" selected>1×</option>
+        <option value="0.75" selected>0.75×</option><option value="1">1×</option>
         <option value="1.5">1.5×</option><option value="2">2×</option>
         <option value="4">4×</option>
       </select>
@@ -155,6 +156,7 @@
         maxPoints: query.get("points") === "all" ? Infinity : 1000000,
         frames: query.get("frames") ? Number(query.get("frames")) : undefined,
         fps: query.get("fps") ? Number(query.get("fps")) : undefined,
+        playbackRate: query.get("rate") ? Number(query.get("rate")) : 0.75, // default 0.75×
       });
       window.__player = player; // console/debug handle
       // roll readout: live from the camera basis (never stale). The old
@@ -272,6 +274,8 @@
       // playback speed: select + keyboard > / < (step through the options)
       const rate = document.getElementById("rate");
       const RATES = [0.25, 0.5, 0.75, 1, 1.5, 2, 4];
+      // keep the select in sync with the player's initial rate (0.75× default)
+      rate.value = String(RATES.includes(player.playbackRate) ? player.playbackRate : 1);
       rate.onchange = () => player.setPlaybackRate(Number(rate.value));
       const stepRate = (dir) => {
         const cur = Number(rate.value);
@@ -354,6 +358,47 @@
         console.log("[view]", json);
         console.log("[view-url]", link.href);
       };
+
+      // ⟳ 重新加载: re-download + re-decode the scene from the network.
+      // Reuses the current camera view; the SW bypasses its cache for the
+      // reload=1 request and freshens the stored copy (same as ?reload=1,
+      // without leaving the page).
+      {
+        const btn = document.getElementById("redownload");
+        btn.onclick = async () => {
+          if (btn.disabled) return;
+          btn.disabled = true;
+          const cam = player.camera;
+          const viewNow = cam ? {
+            eye: cam.snapshot().eye,
+            target: [...cam.target],
+            up: [cam.basis[3], cam.basis[4], cam.basis[5]],
+            fov: (cam.fov * 180) / Math.PI,
+          } : null;
+          // reset the progress overlay
+          const overlay = document.getElementById("bigload");
+          overlay?.removeAttribute("hidden");
+          const reset = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+          const fill = (id, w) => { const el = document.getElementById(id); if (el) el.style.width = w; };
+          fill("fill-dl", "0%"); fill("fill-dc", "0%");
+          reset("pct-dl", "0%"); reset("pct-dc", "—");
+          reset("ph-dl", "download"); reset("ph-dc", "decode");
+          document.getElementById("ph-dl").className = "ph";
+          document.getElementById("ph-dc").className = "ph";
+          status.textContent = "loading…";
+          try {
+            const url = new URL(sceneUrl);
+            url.searchParams.set("reload", "1");
+            await player.load(url.href, { autoplay: true, view: viewNow });
+            btn.textContent = "⟳ 重新加载";
+          } catch (e) {
+            status.textContent = `error: ${e.message ?? e}`;
+            overlay?.setAttribute("hidden", "");
+          } finally {
+            btn.disabled = false;
+          }
+        };
+      }
 
     </script>
   </body>
