@@ -91,13 +91,13 @@
       }
       const resolveSrc = async () => {
         const reloadQ = forceReload ? "?reload=1" : "";
-        for (const c of ["./assets/scene-v9.egsc", "examples/assets/scene-v9.egsc"]) {
+        for (const c of ["./assets/scene-v10.egsc", "examples/assets/scene-v10.egsc"]) {
           try {
             if ((await fetch(new URL(c + reloadQ, location.href), { method: "HEAD" })).ok)
               return new URL(c + reloadQ, location.href).href;
           } catch { /* probe */ }
         }
-        return new URL("./assets/scene-v9.egsc" + reloadQ, location.href).href;
+        return new URL("./assets/scene-v10.egsc" + reloadQ, location.href).href;
       };
       const src = query.get("src") ?? (await resolveSrc());
       // explicit ?src= + ?reload=1: append the reload flag so the SW bypasses
